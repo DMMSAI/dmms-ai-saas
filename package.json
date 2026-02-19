@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node bot.mjs & next start",
     "lint": "eslint",
     "db:init": "npx tsx lib/init-db.ts"
   },

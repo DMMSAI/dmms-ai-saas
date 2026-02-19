@@ -2,12 +2,18 @@
  * Next.js Instrumentation Hook
  *
  * Called once when the Next.js server starts.
- * We use this to start the Telegram bot (long-polling).
+ * Starts the Telegram bot with long-polling.
  */
 export async function register() {
-  // Only run on the Node.js server (not Edge runtime, not during build)
-  if (process.env.NEXT_RUNTIME === "nodejs") {
+  // Skip if we're in Edge runtime (only relevant on Vercel)
+  if (process.env.NEXT_RUNTIME === "edge") return
+
+  console.log("[Instrumentation] register() called")
+
+  try {
     const { startTelegramBot } = await import("./lib/telegram-bot")
     startTelegramBot()
+  } catch (err) {
+    console.error("[Instrumentation] Failed to start bot:", err)
   }
 }
