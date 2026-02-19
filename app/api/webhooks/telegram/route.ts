@@ -3,30 +3,42 @@ import { pool, cuid } from "@/lib/db"
 import { ProviderManager } from "@/core/providers/manager"
 import { ProviderMessage } from "@/core/providers/base"
 
-export const maxDuration = 60 // Allow up to 60s for OpenAI response
-
 export async function POST(req: Request) {
   let update: Record<string, unknown> = {}
 
   try {
     update = await req.json()
-    console.log("[TG] Received:", JSON.stringify(update).slice(0, 300))
+  } catch {
+    return NextResponse.json({ ok: true })
+  }
 
-    const message = (update.message || update.edited_message) as Record<string, unknown> | undefined
-    if (!message?.text) {
-      console.log("[TG] No text in update, skipping")
-      return NextResponse.json({ ok: true })
-    }
+  const message = (update.message || update.edited_message) as Record<string, unknown> | undefined
+  if (!message?.text) {
+    return NextResponse.json({ ok: true })
+  }
 
-    const chat = message.chat as Record<string, unknown>
-    const from = message.from as Record<string, unknown>
-    const chatId = String(chat.id)
-    const text = String(message.text)
+  const chat = message.chat as Record<string, unknown>
+  const chatId = String(chat.id)
+  const text = String(message.text)
+  const messageId = Number(message.message_id)
 
-    // Handle /start command
+  // Respond to Telegram immediately, process in background
+  // This prevents Telegram webhook timeout
+  processMessage(chatId, text, messageId).catch((err) => {
+    console.error("[TG] Background processing error:", err)
+  })
+
+  return NextResponse.json({ ok: true })
+}
+
+async function processMessage(chatId: string, text: string, messageId: number) {
+  try {
+    console.log("[TG] Processing:", text.slice(0, 50))
+
+    // Handle /start
     if (text === "/start") {
       await tgSend(chatId, "Welcome to DMMS AI! Send me any message and I'll respond with AI.")
-      return NextResponse.json({ ok: true })
+      return
     }
 
     // Find enabled Telegram channel
@@ -36,12 +48,12 @@ export async function POST(req: Request) {
     )
     if (channelRes.rows.length === 0) {
       console.log("[TG] No enabled Telegram channel")
-      return NextResponse.json({ ok: true })
+      return
     }
 
     const userChannel = channelRes.rows[0]
 
-    // Parse config for bot token
+    // Parse config
     let config: Record<string, string> = {}
     try {
       config = typeof userChannel.config === "string"
@@ -52,7 +64,7 @@ export async function POST(req: Request) {
     const botToken = config.botToken || process.env.TELEGRAM_BOT_TOKEN
     if (!botToken) {
       console.log("[TG] No bot token")
-      return NextResponse.json({ ok: true })
+      return
     }
 
     // Get OpenAI key
@@ -62,12 +74,14 @@ export async function POST(req: Request) {
     )
     const apiKey = apiKeyRes.rows[0]?.apiKey || process.env.OPENAI_API_KEY
     if (!apiKey) {
-      console.log("[TG] No OpenAI key")
-      await tgSend(chatId, "No OpenAI API key configured. Add one in Settings.", botToken)
-      return NextResponse.json({ ok: true })
+      console.log("[TG] No OpenAI key, userId:", userChannel.userId)
+      await tgSend(chatId, "No OpenAI API key configured. Add one in the dashboard Settings.", botToken)
+      return
     }
 
-    // Send "typing" indicator
+    console.log("[TG] Got API key, sending typing indicator")
+
+    // Typing indicator
     await fetch(`https://api.telegram.org/bot${botToken}/sendChatAction`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -104,17 +118,17 @@ export async function POST(req: Request) {
 
     // Build context
     const historyRes = await pool.query(
-      'SELECT role, content FROM "Message" WHERE "conversationId" = $1 ORDER BY "createdAt" ASC LIMIT 50',
+      'SELECT role, content FROM "Message" WHERE "conversationId" = $1 ORDER BY "createdAt" ASC LIMIT 30',
       [convoId]
     )
 
     const context: ProviderMessage[] = [
-      { role: "system", content: "You are DMMS AI, a helpful AI assistant on Telegram. Be knowledgeable, friendly, and concise. Do NOT use markdown formatting like * or _ since this is Telegram plain text." },
+      { role: "system", content: "You are DMMS AI, a helpful AI assistant on Telegram. Be knowledgeable, friendly, and concise. Keep responses short (under 500 characters when possible). Do NOT use markdown formatting." },
       ...historyRes.rows.map((m) => ({ role: m.role as ProviderMessage["role"], content: m.content })),
     ]
 
     // Call OpenAI
-    console.log("[TG] Calling OpenAI with", context.length, "messages")
+    console.log("[TG] Calling OpenAI, model:", aiModel, "messages:", context.length)
     const pm = new ProviderManager()
     const provider = pm.getOrCreate("openai", { apiKey })
 
@@ -125,7 +139,7 @@ export async function POST(req: Request) {
       }
       if (chunk.type === "error") {
         console.error("[TG] OpenAI error:", chunk.error)
-        fullResponse = "Sorry, I encountered an error. Please try again."
+        fullResponse = "Sorry, I encountered an error: " + chunk.error
         break
       }
     }
@@ -147,19 +161,20 @@ export async function POST(req: Request) {
       [saveNow, convoId]
     )
 
-    // Send reply to Telegram (plain text, no markdown)
-    console.log("[TG] Sending reply to chat", chatId)
-    const sendResult = await tgSend(chatId, fullResponse, botToken, Number(message.message_id))
-    console.log("[TG] Send result:", JSON.stringify(sendResult).slice(0, 200))
+    // Send reply to Telegram
+    console.log("[TG] Sending reply to Telegram")
+    const result = await tgSend(chatId, fullResponse, botToken, messageId)
+    console.log("[TG] Sent! Result ok:", result.ok)
 
-    return NextResponse.json({ ok: true })
   } catch (err) {
-    console.error("[TG] FATAL ERROR:", err instanceof Error ? err.message : err, err instanceof Error ? err.stack : "")
-    return NextResponse.json({ ok: true })
+    console.error("[TG] Error:", err instanceof Error ? `${err.message}\n${err.stack}` : err)
+    // Try to send error message to user
+    try {
+      await tgSend(chatId, "Sorry, something went wrong. Please try again.")
+    } catch {}
   }
 }
 
-/** Send a plain text message via Telegram Bot API */
 async function tgSend(
   chatId: string,
   text: string,
@@ -176,12 +191,12 @@ async function tgSend(
   }
 
   let lastResult: Record<string, unknown> = {}
-  for (const chunk of chunks) {
+  for (let idx = 0; idx < chunks.length; idx++) {
     const body: Record<string, unknown> = {
       chat_id: chatId,
-      text: chunk,
+      text: chunks[idx],
     }
-    if (replyToId && chunks.indexOf(chunk) === 0) {
+    if (replyToId && idx === 0) {
       body.reply_parameters = { message_id: replyToId }
     }
 
@@ -196,8 +211,8 @@ async function tgSend(
         console.error("[TG] sendMessage failed:", JSON.stringify(lastResult))
       }
     } catch (err) {
-      console.error("[TG] sendMessage error:", err instanceof Error ? err.message : err)
-      lastResult = { ok: false, error: String(err) }
+      console.error("[TG] sendMessage error:", err)
+      lastResult = { ok: false }
     }
   }
 
