@@ -110,23 +110,39 @@ export default function ChannelsPage() {
   const [configuring, setConfiguring] = useState<string | null>(null)
   const [formData, setFormData] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
+  const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
 
   useEffect(() => {
     fetch("/api/channels")
       .then((r) => r.json())
-      .then(setSavedChannels)
+      .then((channels) => {
+        // Parse config strings
+        const parsed = channels.map((ch: SavedChannel & { config: string | Record<string, string> }) => ({
+          ...ch,
+          config: typeof ch.config === "string" ? JSON.parse(ch.config || "{}") : ch.config,
+        }))
+        setSavedChannels(parsed)
+      })
       .catch(() => {})
   }, [])
 
   const save = async (channelType: string, enabled: boolean) => {
     setSaving(true)
+    setStatusMessage(null)
     try {
+      // Save channel config
       const res = await fetch("/api/channels", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ channelType, config: formData, enabled }),
       })
       const updated = await res.json()
+
+      // Parse config if it's a string
+      if (typeof updated.config === "string") {
+        try { updated.config = JSON.parse(updated.config) } catch { updated.config = {} }
+      }
+
       setSavedChannels((prev) => {
         const idx = prev.findIndex((c) => c.channelType === channelType)
         if (idx >= 0) {
@@ -136,8 +152,43 @@ export default function ChannelsPage() {
         }
         return [...prev, updated]
       })
+
+      // Auto-register webhook for Telegram
+      if (channelType === "telegram" && enabled && formData.botToken) {
+        setStatusMessage({ type: "success", text: "Config saved. Registering Telegram webhook..." })
+        const whRes = await fetch("/api/channels/telegram/webhook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "register" }),
+        })
+        const whData = await whRes.json()
+        if (whData.ok) {
+          setStatusMessage({
+            type: "success",
+            text: `Telegram connected! Bot: @${whData.botUsername || "your-bot"}. Send it a message to test.`,
+          })
+        } else {
+          setStatusMessage({
+            type: "error",
+            text: `Webhook registration failed: ${whData.description || whData.error || "Unknown error"}`,
+          })
+        }
+      } else if (channelType === "telegram" && !enabled) {
+        // Unregister webhook when disabling
+        await fetch("/api/channels/telegram/webhook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "unregister" }),
+        })
+        setStatusMessage({ type: "success", text: "Telegram disconnected." })
+      } else {
+        setStatusMessage({ type: "success", text: "Channel saved!" })
+      }
+
       setConfiguring(null)
       setFormData({})
+    } catch (err) {
+      setStatusMessage({ type: "error", text: "Failed to save channel." })
     } finally {
       setSaving(false)
     }
@@ -154,6 +205,18 @@ export default function ChannelsPage() {
           Connect messaging platforms to your AI assistant
         </p>
       </div>
+
+      {statusMessage && (
+        <div
+          className={`rounded-lg p-3 text-sm ${
+            statusMessage.type === "success"
+              ? "bg-teal-500/10 text-teal-400"
+              : "bg-red-500/10 text-red-400"
+          }`}
+        >
+          {statusMessage.text}
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         {CHANNELS.map((ch) => {
@@ -207,7 +270,7 @@ export default function ChannelsPage() {
                           onClick={() => save(ch.type, true)}
                           disabled={saving}
                         >
-                          {saving ? "Saving..." : "Save & Enable"}
+                          {saving ? "Connecting..." : "Save & Connect"}
                         </Button>
                         <Button
                           size="sm"
@@ -215,6 +278,7 @@ export default function ChannelsPage() {
                           onClick={() => {
                             setConfiguring(null)
                             setFormData({})
+                            setStatusMessage(null)
                           }}
                         >
                           Cancel
@@ -226,9 +290,8 @@ export default function ChannelsPage() {
                         variant="outline"
                         onClick={() => {
                           setConfiguring(ch.type)
-                          setFormData(
-                            (saved?.config as Record<string, string>) || {}
-                          )
+                          setFormData(saved?.config || {})
+                          setStatusMessage(null)
                         }}
                       >
                         {saved ? "Configure" : "Set Up"}
@@ -240,7 +303,7 @@ export default function ChannelsPage() {
                         variant="ghost"
                         onClick={() => save(ch.type, false)}
                       >
-                        Disable
+                        Disconnect
                       </Button>
                     )}
                   </>
