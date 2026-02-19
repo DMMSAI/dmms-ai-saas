@@ -84,11 +84,50 @@ TOOLS.push({
 
 // ── Web Search Implementation ────────────────────────────────────────
 
+/**
+ * Fetch and extract readable text from a URL
+ */
+async function fetchPageContent(url, maxChars = 2000) {
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "DMMS-AI/3.0 (compatible; bot)" },
+      signal: AbortSignal.timeout(6000),
+      redirect: "follow",
+    })
+    if (!res.ok) return ""
+    const html = await res.text()
+
+    // Remove scripts, styles, nav, footer, header, forms
+    let text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<nav[\s\S]*?<\/nav>/gi, "")
+      .replace(/<footer[\s\S]*?<\/footer>/gi, "")
+      .replace(/<header[\s\S]*?<\/header>/gi, "")
+      .replace(/<form[\s\S]*?<\/form>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#x27;/g, "'")
+      .replace(/&#39;/g, "'")
+      .replace(/\s+/g, " ")
+      .trim()
+
+    return text.slice(0, maxChars)
+  } catch {
+    return ""
+  }
+}
+
 async function webSearch(args) {
   const query = args.query
   console.log(`[MW:Search] Searching: "${query}"`)
 
   try {
+    // Step 1: Search DuckDuckGo for results + URLs
     const res = await fetch("https://lite.duckduckgo.com/lite/", {
       method: "POST",
       headers: {
@@ -102,46 +141,38 @@ async function webSearch(args) {
     const html = await res.text()
     const results = []
 
-    const snippetRegex =
-      /<td\s+class=['"]result-snippet['"]>([\s\S]*?)<\/td>/gi
-    const linkRegex =
-      /<a\s+[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/gi
+    const snippetRegex = /<td\s+class=['"]result-snippet['"]>([\s\S]*?)<\/td>/gi
+    const linkRegex = /<a\s+[^>]*class=['"]result-link['"][^>]*href=['"]([^'"]+)['"][^>]*>([\s\S]*?)<\/a>/gi
 
     const snippets = []
-    const titles = []
+    const links = [] // { url, title }
     let m
 
     while ((m = snippetRegex.exec(html)) !== null && snippets.length < 5) {
       snippets.push(
-        m[1]
-          .replace(/<[^>]+>/g, "")
-          .replace(/&amp;/g, "&")
-          .replace(/&lt;/g, "<")
-          .replace(/&gt;/g, ">")
-          .replace(/&quot;/g, '"')
-          .replace(/&#x27;/g, "'")
-          .replace(/\s+/g, " ")
-          .trim()
+        m[1].replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'")
+          .replace(/\s+/g, " ").trim()
       )
     }
 
-    while ((m = linkRegex.exec(html)) !== null && titles.length < 5) {
-      titles.push(
-        m[1]
-          .replace(/<[^>]+>/g, "")
-          .replace(/&amp;/g, "&")
-          .replace(/\s+/g, " ")
-          .trim()
-      )
+    while ((m = linkRegex.exec(html)) !== null && links.length < 5) {
+      const url = m[1].trim()
+      const title = m[2].replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim()
+      if (url.startsWith("http")) {
+        links.push({ url, title })
+      }
     }
 
-    for (let i = 0; i < Math.max(snippets.length, titles.length); i++) {
+    for (let i = 0; i < Math.max(snippets.length, links.length); i++) {
       results.push({
-        title: titles[i] || "",
+        title: links[i]?.title || "",
+        url: links[i]?.url || "",
         snippet: snippets[i] || "",
       })
     }
 
+    // Fallback: DuckDuckGo Instant Answer API
     if (results.length === 0) {
       const iaRes = await fetch(
         `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1`,
@@ -150,15 +181,15 @@ async function webSearch(args) {
       const iaData = await iaRes.json()
 
       if (iaData.AbstractText) {
-        results.push({ title: iaData.Heading || query, snippet: iaData.AbstractText })
+        results.push({ title: iaData.Heading || query, url: iaData.AbstractURL || "", snippet: iaData.AbstractText })
       }
       if (iaData.Answer) {
-        results.push({ title: "Answer", snippet: iaData.Answer })
+        results.push({ title: "Answer", url: "", snippet: iaData.Answer })
       }
       if (iaData.RelatedTopics && results.length === 0) {
         for (const topic of iaData.RelatedTopics.slice(0, 3)) {
           if (topic.Text) {
-            results.push({ title: topic.FirstURL || "", snippet: topic.Text })
+            results.push({ title: topic.FirstURL || "", url: topic.FirstURL || "", snippet: topic.Text })
           }
         }
       }
@@ -168,12 +199,35 @@ async function webSearch(args) {
       return `No search results found for: "${query}". Please answer based on your knowledge.`
     }
 
-    const formatted = results
-      .map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}`)
-      .join("\n\n")
+    // Step 2: Fetch actual page content from top 3 URLs
+    const urlsToFetch = results.filter(r => r.url).slice(0, 3)
+    console.log(`[MW:Search] Found ${results.length} results, fetching content from ${urlsToFetch.length} pages...`)
 
-    console.log(`[MW:Search] Found ${results.length} results`)
-    return `Web search results for "${query}":\n\n${formatted}\n\nUse these results to give the user an accurate, up-to-date answer.`
+    const pageContents = await Promise.allSettled(
+      urlsToFetch.map(r => fetchPageContent(r.url, 2000))
+    )
+
+    // Combine search snippets + fetched page content
+    let output = `Web search results for "${query}":\n\n`
+
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i]
+      output += `[${i + 1}] ${r.title}\n`
+      if (r.url) output += `URL: ${r.url}\n`
+      output += `Snippet: ${r.snippet}\n`
+
+      // Add fetched page content if available
+      const fetchIdx = urlsToFetch.indexOf(r)
+      if (fetchIdx >= 0 && pageContents[fetchIdx]?.status === "fulfilled" && pageContents[fetchIdx].value) {
+        output += `Page content: ${pageContents[fetchIdx].value}\n`
+      }
+      output += "\n"
+    }
+
+    output += "Use these search results and page content to give the user a detailed, accurate, up-to-date answer. Cite sources when possible."
+
+    console.log(`[MW:Search] Completed — ${results.length} results with page content`)
+    return output
   } catch (err) {
     console.error(`[MW:Search] Error:`, err.message)
     return `Web search failed (${err.message}). Please answer based on your knowledge and let the user know the information might not be fully current.`
@@ -234,10 +288,10 @@ async function getOrCreateConvo(ctx) {
 
   if (convoRes.rows.length > 0) {
     ctx.convoId = convoRes.rows[0].id
-    ctx.aiModel = convoRes.rows[0].aiModel || "gpt-4o-mini"
+    ctx.aiModel = convoRes.rows[0].aiModel || "gpt-5.2-chat-latest"
   } else {
     ctx.convoId = cuid()
-    ctx.aiModel = "gpt-4o-mini"
+    ctx.aiModel = "gpt-5.2-chat-latest"
     await pool.query(
       'INSERT INTO "Conversation" (id, "userId", "channelType", "channelPeer", title, "aiModel", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
       [ctx.convoId, ctx.userId, ctx.channelType, ctx.channelPeer, ctx.text.slice(0, 50), ctx.aiModel, ctx.now, ctx.now]
@@ -282,7 +336,7 @@ async function callAI(ctx) {
       model: ctx.aiModel,
       messages,
       temperature: 0.7,
-      max_tokens: 1024,
+      max_tokens: 2048,
     }
 
     if (tools.length > 0) {
@@ -555,6 +609,7 @@ async function startTelegram() {
 // ══════════════════════════════════════════════════════════════════════
 
 let waSocket = null
+let waConnecting = false // Prevent duplicate connection attempts
 
 async function startWhatsApp() {
   let waUserId = null
@@ -589,6 +644,7 @@ async function startWhatsApp() {
 }
 
 async function connectWhatsApp(userId, retryCount = 0) {
+  waConnecting = true
   try {
     const { state, saveCreds, pool: authPool } = await usePgAuthState(
       process.env.DATABASE_URL,
@@ -616,7 +672,6 @@ async function connectWhatsApp(userId, retryCount = 0) {
       if (connection === "close") {
         waSocket = null
         const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut
 
         console.log(`[WA] Connection closed (code: ${statusCode})`)
         await writeChannelEvent(userId, "whatsapp", "disconnected", String(statusCode))
@@ -627,14 +682,24 @@ async function connectWhatsApp(userId, retryCount = 0) {
           ["disconnected", userId, "whatsapp"]
         ).catch(() => {})
 
-        if (shouldReconnect && retryCount < 5) {
-          const delay = Math.min(3000 * Math.pow(2, retryCount), 30000)
-          console.log(`[WA] Reconnecting in ${delay / 1000}s (attempt ${retryCount + 1})...`)
-          setTimeout(() => connectWhatsApp(userId, retryCount + 1), delay)
-        } else if (!shouldReconnect) {
+        if (statusCode === DisconnectReason.loggedOut) {
           console.log("[WA] Logged out — clearing auth state")
           await pool.query("DELETE FROM baileys_auth WHERE user_id = $1", [userId])
           await writeChannelEvent(userId, "whatsapp", "logged_out", null)
+          waConnecting = false
+        } else if (statusCode === 440) {
+          // Conflict — another session replaced us. Stop reconnecting.
+          console.log("[WA] Conflict (replaced by another session) — stopping reconnect")
+          waConnecting = false
+        } else if (retryCount < 5) {
+          // Other disconnect — retry with backoff
+          const delay = Math.min(3000 * Math.pow(2, retryCount), 30000)
+          console.log(`[WA] Reconnecting in ${delay / 1000}s (attempt ${retryCount + 1})...`)
+          // Keep waConnecting = true so watcher doesn't interfere
+          setTimeout(() => connectWhatsApp(userId, retryCount + 1), delay)
+        } else {
+          console.log("[WA] Max retries reached — stopping")
+          waConnecting = false
         }
       }
 
@@ -713,6 +778,7 @@ async function connectWhatsApp(userId, retryCount = 0) {
       }
     })
   } catch (err) {
+    waConnecting = false
     console.error("[WA] Fatal error:", err.message)
     if (retryCount < 5) {
       const delay = Math.min(3000 * Math.pow(2, retryCount), 30000)
@@ -955,6 +1021,38 @@ async function startGenericChannels() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// WATCHER: Poll for newly enabled channels from dashboard
+// ══════════════════════════════════════════════════════════════════════
+
+async function watchForNewChannels() {
+  while (true) {
+    await new Promise((r) => setTimeout(r, 5000)) // Check every 5 seconds
+
+    try {
+      // Watch for WhatsApp — if enabled in DB but no active socket and not already connecting
+      if (!waSocket && !waConnecting) {
+        const res = await pool.query(
+          'SELECT "userId", config FROM "UserChannel" WHERE "channelType" = $1 AND enabled = true LIMIT 1',
+          ["whatsapp"]
+        )
+        if (res.rows.length > 0) {
+          const raw = res.rows[0].config
+          const config = typeof raw === "string" ? JSON.parse(raw) : raw
+          if (!config?.accessToken) {
+            console.log("[WA] New WhatsApp connection detected — starting Baileys...")
+            connectWhatsApp(res.rows[0].userId).catch((err) => {
+              console.error("[WA] Watcher start error:", err.message)
+            })
+          }
+        }
+      }
+    } catch (err) {
+      // Silently continue polling
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // MAIN
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1012,6 +1110,9 @@ async function main() {
   }
 
   console.log("[Gateway] All channels initialized. Waiting for messages...")
+
+  // Start background watcher for new channel activations from the dashboard
+  watchForNewChannels()
 
   // Keep the process alive
   process.on("SIGINT", async () => {

@@ -31,6 +31,13 @@ export async function POST() {
     )
   }
 
+  // Clear old auth state + events to force fresh QR scan
+  await pool.query("DELETE FROM baileys_auth WHERE user_id = $1", [userId])
+  await pool.query(
+    "DELETE FROM channel_events WHERE user_id = $1 AND channel_type = 'whatsapp'",
+    [userId]
+  )
+
   // Write a "connecting" event so the dashboard knows we're starting
   await pool.query(
     "INSERT INTO channel_events (id, user_id, channel_type, event_type, payload, created_at) VALUES ($1, $2, $3, $4, $5, NOW())",
