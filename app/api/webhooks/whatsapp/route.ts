@@ -397,18 +397,25 @@ async function waSend(phoneNumberId: string, accessToken: string, to: string, te
 // ── Helpers ──────────────────────────────────────────────────────────
 
 async function getVerifyToken(): Promise<string> {
+  const fallback = process.env.WHATSAPP_VERIFY_TOKEN || "dmmsai_whatsapp_verify_2026"
   try {
-    const res = await pool.query(
+    const timeoutPromise = new Promise<null>((_, reject) =>
+      setTimeout(() => reject(new Error("DB timeout")), 5000)
+    )
+    const queryPromise = pool.query(
       'SELECT config FROM "UserChannel" WHERE "channelType" = $1 AND enabled = true LIMIT 1',
       ["whatsapp"]
     )
-    if (res.rows.length > 0) {
+    const res = await Promise.race([queryPromise, timeoutPromise])
+    if (res && res.rows.length > 0) {
       const raw = res.rows[0].config
       const config = typeof raw === "string" ? JSON.parse(raw) : raw
       if (config?.verifyToken) return config.verifyToken
     }
-  } catch {}
-  return process.env.WHATSAPP_VERIFY_TOKEN || "dmmsai_whatsapp_verify_2026"
+  } catch (err) {
+    console.error("[WA] getVerifyToken error:", err instanceof Error ? err.message : err)
+  }
+  return fallback
 }
 
 // ── Types ────────────────────────────────────────────────────────────
