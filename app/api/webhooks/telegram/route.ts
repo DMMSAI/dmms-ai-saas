@@ -3,70 +3,86 @@ import { pool, cuid } from "@/lib/db"
 import { ProviderManager } from "@/core/providers/manager"
 import { ProviderMessage } from "@/core/providers/base"
 
+export const maxDuration = 60 // Allow up to 60s for OpenAI response
+
 export async function POST(req: Request) {
+  let update: Record<string, unknown> = {}
+
   try {
-    const update = await req.json()
-    console.log("[Telegram Webhook] Received update:", JSON.stringify(update).slice(0, 200))
+    update = await req.json()
+    console.log("[TG] Received:", JSON.stringify(update).slice(0, 300))
 
-    // Extract message from Telegram update
-    const message = update.message || update.edited_message
+    const message = (update.message || update.edited_message) as Record<string, unknown> | undefined
     if (!message?.text) {
+      console.log("[TG] No text in update, skipping")
       return NextResponse.json({ ok: true })
     }
 
-    const chatId = String(message.chat.id)
-    const fromId = String(message.from?.id || "")
-    const text = message.text
+    const chat = message.chat as Record<string, unknown>
+    const from = message.from as Record<string, unknown>
+    const chatId = String(chat.id)
+    const text = String(message.text)
 
-    // Skip bot commands like /start
+    // Handle /start command
     if (text === "/start") {
-      await sendTelegramReply(chatId, "Welcome to DMMS AI! Send me any message and I'll respond with AI. 🤖")
+      await tgSend(chatId, "Welcome to DMMS AI! Send me any message and I'll respond with AI.")
       return NextResponse.json({ ok: true })
     }
 
-    // Find which user has Telegram enabled
+    // Find enabled Telegram channel
     const channelRes = await pool.query(
       'SELECT * FROM "UserChannel" WHERE "channelType" = $1 AND enabled = true LIMIT 1',
       ["telegram"]
     )
-    const userChannel = channelRes.rows[0]
-    if (!userChannel) {
-      console.log("[Telegram Webhook] No enabled Telegram channel found")
+    if (channelRes.rows.length === 0) {
+      console.log("[TG] No enabled Telegram channel")
       return NextResponse.json({ ok: true })
     }
 
-    // Parse the stored config to get the bot token
+    const userChannel = channelRes.rows[0]
+
+    // Parse config for bot token
     let config: Record<string, string> = {}
     try {
-      config = typeof userChannel.config === "string" ? JSON.parse(userChannel.config) : userChannel.config
-    } catch {
-      config = {}
-    }
+      config = typeof userChannel.config === "string"
+        ? JSON.parse(userChannel.config)
+        : (userChannel.config || {})
+    } catch { config = {} }
+
     const botToken = config.botToken || process.env.TELEGRAM_BOT_TOKEN
     if (!botToken) {
-      console.log("[Telegram Webhook] No bot token found")
+      console.log("[TG] No bot token")
       return NextResponse.json({ ok: true })
     }
 
-    // Get the user's OpenAI API key
+    // Get OpenAI key
     const apiKeyRes = await pool.query(
       'SELECT "apiKey" FROM "UserApiKey" WHERE "userId" = $1 AND provider = $2',
       [userChannel.userId, "openai"]
     )
     const apiKey = apiKeyRes.rows[0]?.apiKey || process.env.OPENAI_API_KEY
     if (!apiKey) {
-      await sendTelegramMessage(botToken, chatId, "No OpenAI API key configured. Please add one in the DMMS AI dashboard settings.")
+      console.log("[TG] No OpenAI key")
+      await tgSend(chatId, "No OpenAI API key configured. Add one in Settings.", botToken)
       return NextResponse.json({ ok: true })
     }
 
-    // Get or create conversation for this Telegram chat
-    let convoRes = await pool.query(
+    // Send "typing" indicator
+    await fetch(`https://api.telegram.org/bot${botToken}/sendChatAction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, action: "typing" }),
+    }).catch(() => {})
+
+    // Get or create conversation
+    const convoRes = await pool.query(
       'SELECT id, "aiModel" FROM "Conversation" WHERE "userId" = $1 AND "channelType" = $2 AND "channelPeer" = $3 ORDER BY "updatedAt" DESC LIMIT 1',
       [userChannel.userId, "telegram", chatId]
     )
 
     let convoId: string
     let aiModel: string
+    const now = new Date().toISOString()
 
     if (convoRes.rows.length > 0) {
       convoId = convoRes.rows[0].id
@@ -74,7 +90,6 @@ export async function POST(req: Request) {
     } else {
       convoId = cuid()
       aiModel = "gpt-4o"
-      const now = new Date().toISOString()
       await pool.query(
         'INSERT INTO "Conversation" (id, "userId", "channelType", "channelPeer", title, "aiModel", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
         [convoId, userChannel.userId, "telegram", chatId, text.slice(0, 50), aiModel, now, now]
@@ -82,25 +97,24 @@ export async function POST(req: Request) {
     }
 
     // Save user message
-    const userMsgId = cuid()
-    const now = new Date().toISOString()
     await pool.query(
       'INSERT INTO "Message" (id, "conversationId", role, content, "createdAt") VALUES ($1, $2, $3, $4, $5)',
-      [userMsgId, convoId, "user", text, now]
+      [cuid(), convoId, "user", text, now]
     )
 
-    // Build context from conversation history
-    const messagesRes = await pool.query(
+    // Build context
+    const historyRes = await pool.query(
       'SELECT role, content FROM "Message" WHERE "conversationId" = $1 ORDER BY "createdAt" ASC LIMIT 50',
       [convoId]
     )
 
     const context: ProviderMessage[] = [
-      { role: "system", content: "You are DMMS AI, a helpful AI assistant on Telegram. Be knowledgeable, friendly, and concise." },
-      ...messagesRes.rows.map((m) => ({ role: m.role as ProviderMessage["role"], content: m.content })),
+      { role: "system", content: "You are DMMS AI, a helpful AI assistant on Telegram. Be knowledgeable, friendly, and concise. Do NOT use markdown formatting like * or _ since this is Telegram plain text." },
+      ...historyRes.rows.map((m) => ({ role: m.role as ProviderMessage["role"], content: m.content })),
     ]
 
     // Call OpenAI
+    console.log("[TG] Calling OpenAI with", context.length, "messages")
     const pm = new ProviderManager()
     const provider = pm.getOrCreate("openai", { apiKey })
 
@@ -110,7 +124,8 @@ export async function POST(req: Request) {
         fullResponse += chunk.content
       }
       if (chunk.type === "error") {
-        fullResponse = `Error: ${chunk.error}`
+        console.error("[TG] OpenAI error:", chunk.error)
+        fullResponse = "Sorry, I encountered an error. Please try again."
         break
       }
     }
@@ -119,60 +134,72 @@ export async function POST(req: Request) {
       fullResponse = "Sorry, I couldn't generate a response. Please try again."
     }
 
+    console.log("[TG] AI response:", fullResponse.slice(0, 100))
+
     // Save assistant message
-    const asstMsgId = cuid()
     const saveNow = new Date().toISOString()
     await pool.query(
       'INSERT INTO "Message" (id, "conversationId", role, content, "createdAt") VALUES ($1, $2, $3, $4, $5)',
-      [asstMsgId, convoId, "assistant", fullResponse, saveNow]
+      [cuid(), convoId, "assistant", fullResponse, saveNow]
     )
     await pool.query(
       'UPDATE "Conversation" SET "updatedAt" = $1 WHERE id = $2',
       [saveNow, convoId]
     )
 
-    // Send reply to Telegram
-    await sendTelegramMessage(botToken, chatId, fullResponse, message.message_id)
+    // Send reply to Telegram (plain text, no markdown)
+    console.log("[TG] Sending reply to chat", chatId)
+    const sendResult = await tgSend(chatId, fullResponse, botToken, Number(message.message_id))
+    console.log("[TG] Send result:", JSON.stringify(sendResult).slice(0, 200))
 
-    console.log(`[Telegram Webhook] Replied to chat ${chatId}: ${fullResponse.slice(0, 50)}...`)
     return NextResponse.json({ ok: true })
   } catch (err) {
-    console.error("[Telegram Webhook] Error:", err)
-    return NextResponse.json({ ok: true }) // Always 200 to Telegram
+    console.error("[TG] FATAL ERROR:", err instanceof Error ? err.message : err, err instanceof Error ? err.stack : "")
+    return NextResponse.json({ ok: true })
   }
 }
 
-/** Send a message via Telegram Bot API */
-async function sendTelegramMessage(botToken: string, chatId: string, text: string, replyToMessageId?: number) {
-  const body: Record<string, unknown> = {
-    chat_id: chatId,
-    text,
-    parse_mode: "Markdown",
-  }
-  if (replyToMessageId) {
-    body.reply_parameters = { message_id: replyToMessageId }
+/** Send a plain text message via Telegram Bot API */
+async function tgSend(
+  chatId: string,
+  text: string,
+  botToken?: string,
+  replyToId?: number
+): Promise<Record<string, unknown>> {
+  const token = botToken || process.env.TELEGRAM_BOT_TOKEN
+  if (!token) return { ok: false, error: "no token" }
+
+  // Split long messages (Telegram limit is 4096 chars)
+  const chunks = []
+  for (let i = 0; i < text.length; i += 4000) {
+    chunks.push(text.slice(i, i + 4000))
   }
 
-  const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  })
+  let lastResult: Record<string, unknown> = {}
+  for (const chunk of chunks) {
+    const body: Record<string, unknown> = {
+      chat_id: chatId,
+      text: chunk,
+    }
+    if (replyToId && chunks.indexOf(chunk) === 0) {
+      body.reply_parameters = { message_id: replyToId }
+    }
 
-  if (!res.ok) {
-    // Retry without markdown if it fails (markdown can cause issues)
-    body.parse_mode = undefined
-    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    })
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      lastResult = await res.json() as Record<string, unknown>
+      if (!lastResult.ok) {
+        console.error("[TG] sendMessage failed:", JSON.stringify(lastResult))
+      }
+    } catch (err) {
+      console.error("[TG] sendMessage error:", err instanceof Error ? err.message : err)
+      lastResult = { ok: false, error: String(err) }
+    }
   }
-}
 
-/** Quick reply helper (uses env bot token) */
-async function sendTelegramReply(chatId: string, text: string) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN
-  if (!botToken) return
-  await sendTelegramMessage(botToken, chatId, text)
+  return lastResult
 }
