@@ -842,12 +842,40 @@ async function startDiscord() {
 // MAIN
 // ══════════════════════════════════════════════════════════════════════
 
+async function ensureTables() {
+  console.log("[Gateway] Ensuring database tables exist...")
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS baileys_auth (
+      id         TEXT NOT NULL,
+      user_id    TEXT NOT NULL REFERENCES "User"(id) ON DELETE CASCADE,
+      data       JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, id)
+    );
+    CREATE TABLE IF NOT EXISTS channel_events (
+      id           TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL REFERENCES "User"(id) ON DELETE CASCADE,
+      channel_type TEXT NOT NULL,
+      event_type   TEXT NOT NULL,
+      payload      TEXT,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_events_user ON channel_events(user_id, channel_type, event_type);
+  `)
+  console.log("[Gateway] Database tables ready.")
+}
+
 async function main() {
   console.log("╔══════════════════════════════════════════════════════╗")
   console.log("║  DMMS AI — Multi-Channel Gateway v3.0               ║")
   console.log("║  Every Messenger is AI Now.                          ║")
   console.log("╚══════════════════════════════════════════════════════╝")
   console.log(`[Gateway] Tools: ${TOOLS.map((t) => t.definition.function.name).join(", ")}`)
+
+  // Auto-create new tables on startup (safe — uses IF NOT EXISTS)
+  await ensureTables()
+
   console.log("[Gateway] Starting channels...")
 
   // Start all channels concurrently
