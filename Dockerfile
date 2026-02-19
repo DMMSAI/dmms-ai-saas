@@ -16,14 +16,14 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Copy everything needed for production
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
+# Copy standalone server (includes node_modules)
+COPY --from=builder /app/.next/standalone ./
+# Copy static files
+COPY --from=builder /app/.next/static ./.next/static
+# Copy public assets
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/bot.mjs ./
 
 EXPOSE 3000
 
-# Start bot (background) + Next.js (foreground)
-CMD ["sh", "-c", "node bot.mjs & npx next start -p ${PORT:-3000}"]
+# Start bot (background) + Next.js standalone server (foreground)
+CMD ["sh", "-c", "node bot.mjs & node server.js"]

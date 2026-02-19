@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "sh start.sh",
+    "build": "next build && cp bot.mjs .next/standalone/bot.mjs",
+    "start": "node .next/standalone/bot.mjs & node .next/standalone/server.js",
     "lint": "eslint",
     "db:init": "npx tsx lib/init-db.ts"
   },
