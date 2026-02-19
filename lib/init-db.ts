@@ -61,6 +61,25 @@ CREATE TABLE IF NOT EXISTS "Message" (
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS baileys_auth (
+  id         TEXT NOT NULL,
+  user_id    TEXT NOT NULL REFERENCES "User"(id) ON DELETE CASCADE,
+  data       JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (user_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS channel_events (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES "User"(id) ON DELETE CASCADE,
+  channel_type TEXT NOT NULL,
+  event_type   TEXT NOT NULL,
+  payload      TEXT,
+  created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_channel_events_user ON channel_events(user_id, channel_type, event_type);
+
 CREATE INDEX IF NOT EXISTS idx_conversation_user ON "Conversation"("userId");
 CREATE INDEX IF NOT EXISTS idx_message_conversation ON "Message"("conversationId");
 CREATE INDEX IF NOT EXISTS idx_userchannel_user ON "UserChannel"("userId");

@@ -10,6 +10,9 @@ const nextConfig: NextConfig = {
     "bcryptjs",
     "pg",
     "openai",
+    "@whiskeysockets/baileys",
+    "qrcode",
+    "pino",
   ],
 }
 

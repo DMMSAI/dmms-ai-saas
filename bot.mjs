@@ -1,41 +1,36 @@
 /**
- * DMMS AI — Telegram Bot v2.0
- * Intelligent Middleware Architecture
+ * DMMS AI — Multi-Channel Gateway v3.0
+ * Unified AI Gateway: Telegram + WhatsApp (Baileys QR) + Discord
  *
- * Pipeline:
- *   Telegram → Receive → Session → Context → AI (+ Tools) → Store → Send → Telegram
+ * Pipeline (shared across all channels):
+ *   Channel → Receive → Session → Context → AI (+ Tools) → Store → Send → Channel
  *
- * The AI middleware uses OpenAI function calling with tools:
- *   - web_search: Search the internet for real-time information
- *   - get_datetime: Get current date, time, and timezone
- *
- * The middleware is EXTENSIBLE — add new tools/layers by registering them.
+ * Channels:
+ *   - Telegram: Long-polling via Telegram Bot API
+ *   - WhatsApp: QR code scanning via Baileys (WhatsApp Web protocol)
+ *   - Discord: discord.js client with message intents
  */
 
 import pg from "pg"
 import OpenAI from "openai"
 import { randomBytes } from "crypto"
+import { makeWASocket, DisconnectReason, useMultiFileAuthState } from "@whiskeysockets/baileys"
+import { Boom } from "@hapi/boom"
+import { Client, GatewayIntentBits } from "discord.js"
+import { usePgAuthState } from "./lib/baileys-auth-pg.mjs"
 
 const { Pool } = pg
 
 // ── Config ───────────────────────────────────────────────────────────
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 })
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 10 })
 const cuid = () => "c" + randomBytes(12).toString("hex")
-
-let BOT_TOKEN = ""
-const TG = (method) => `https://api.telegram.org/bot${BOT_TOKEN}/${method}`
 
 // ── Tools Registry (Extensible) ─────────────────────────────────────
 
-/**
- * Each tool has:
- *   definition — OpenAI function schema (name, description, parameters)
- *   execute(args) — async function that returns a string result
- */
 const TOOLS = []
 
-// Tool 1: Web Search — search the internet for real-time info
+// Tool 1: Web Search
 TOOLS.push({
   definition: {
     type: "function",
@@ -94,23 +89,19 @@ async function webSearch(args) {
   console.log(`[MW:Search] Searching: "${query}"`)
 
   try {
-    // Use DuckDuckGo HTML lite (no API key required)
     const res = await fetch("https://lite.duckduckgo.com/lite/", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "DMMS-AI/2.0",
+        "User-Agent": "DMMS-AI/3.0",
       },
       body: `q=${encodeURIComponent(query)}`,
       signal: AbortSignal.timeout(8000),
     })
 
     const html = await res.text()
-
-    // Extract search result snippets from DuckDuckGo lite HTML
     const results = []
 
-    // DuckDuckGo lite uses single quotes: class='result-link' and class='result-snippet'
     const snippetRegex =
       /<td\s+class=['"]result-snippet['"]>([\s\S]*?)<\/td>/gi
     const linkRegex =
@@ -144,7 +135,6 @@ async function webSearch(args) {
       )
     }
 
-    // Build results
     for (let i = 0; i < Math.max(snippets.length, titles.length); i++) {
       results.push({
         title: titles[i] || "",
@@ -153,7 +143,6 @@ async function webSearch(args) {
     }
 
     if (results.length === 0) {
-      // Fallback: try DuckDuckGo instant answer API
       const iaRes = await fetch(
         `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1`,
         { signal: AbortSignal.timeout(5000) }
@@ -161,15 +150,11 @@ async function webSearch(args) {
       const iaData = await iaRes.json()
 
       if (iaData.AbstractText) {
-        results.push({
-          title: iaData.Heading || query,
-          snippet: iaData.AbstractText,
-        })
+        results.push({ title: iaData.Heading || query, snippet: iaData.AbstractText })
       }
       if (iaData.Answer) {
         results.push({ title: "Answer", snippet: iaData.Answer })
       }
-      // Related topics as fallback
       if (iaData.RelatedTopics && results.length === 0) {
         for (const topic of iaData.RelatedTopics.slice(0, 3)) {
           if (topic.Text) {
@@ -197,7 +182,7 @@ async function webSearch(args) {
 
 // ── System Prompt ────────────────────────────────────────────────────
 
-function buildSystemPrompt() {
+function buildSystemPrompt(channelName = "Messenger") {
   const now = new Date()
   const dateStr = now.toLocaleDateString("en-US", {
     weekday: "long",
@@ -207,7 +192,7 @@ function buildSystemPrompt() {
   })
   const timeStr = now.toLocaleTimeString("en-US", { hour12: true })
 
-  return `You are DMMS AI, an intelligent AI assistant on Telegram. Today is ${dateStr}, ${timeStr} UTC.
+  return `You are DMMS AI, an intelligent AI assistant on ${channelName}. Today is ${dateStr}, ${timeStr} UTC.
 
 CAPABILITIES:
 - You can search the internet for real-time information (weather, news, prices, events, etc.)
@@ -219,7 +204,7 @@ RULES:
 - When asked about weather, news, prices, sports, or current events: ALWAYS use the web_search tool first
 - Be helpful, accurate, and direct
 - Keep responses concise but complete (under 500 characters when possible)
-- Use plain text for Telegram — no markdown formatting, no asterisks, no code blocks
+- Use plain text — no markdown formatting, no asterisks, no code blocks
 - If the user greets you, greet them warmly and ask how you can help
 - If a tool search fails, be honest about it
 - Be conversational and natural, like a smart friend
@@ -231,73 +216,18 @@ IDENTITY:
 - Your tagline: "Every Messenger is AI Now"`
 }
 
-// ── Middleware Pipeline ──────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// SHARED MIDDLEWARE PIPELINE
+// ══════════════════════════════════════════════════════════════════════
 
-const pipeline = [
-  receiveMiddleware,
-  sessionMiddleware,
-  contextMiddleware,
-  aiMiddleware,
-  storeMiddleware,
-  sendMiddleware,
-]
-
-async function processMessage(msg) {
-  const ctx = {}
-
-  try {
-    for (const mw of pipeline) {
-      await mw(ctx, msg)
-    }
-    const preview = (s) => (s || "").slice(0, 50).replace(/\n/g, " ")
-    console.log(`[MW] ${ctx.userName}: "${preview(ctx.text)}" → "${preview(ctx.reply)}"`)
-  } catch (err) {
-    console.error("[MW] Pipeline error:", err.message)
-    if (ctx.chatId) {
-      await tgSend(ctx.chatId, "Sorry, something went wrong. Please try again.").catch(() => {})
-    }
-  }
-}
-
-// ── MW 1: Receive — Parse incoming Telegram message ─────────────────
-
-async function receiveMiddleware(ctx, msg) {
-  ctx.chatId = String(msg.chat.id)
-  ctx.text = (msg.text || "").trim()
-  ctx.messageId = msg.message_id
-  ctx.userName = msg.from?.first_name || "User"
-  ctx.telegramUserId = String(msg.from?.id || "")
-  ctx.userId = null
-  ctx.startTime = Date.now()
-
-  if (!ctx.text) throw new Error("Empty message — skipping")
-
-  console.log(`[MW:Receive] From ${ctx.userName} (${ctx.chatId}): "${ctx.text.slice(0, 60)}"`)
-}
-
-// ── MW 2: Session — Load user, conversation, history from DB ────────
-
-async function sessionMiddleware(ctx) {
-  // Find the Telegram channel owner
-  const channelRes = await pool.query(
-    'SELECT "userId" FROM "UserChannel" WHERE "channelType" = $1 AND enabled = true LIMIT 1',
-    ["telegram"]
-  )
-  if (channelRes.rows.length === 0) throw new Error("No Telegram channel configured")
-  ctx.userId = channelRes.rows[0].userId
-
-  // Get OpenAI API key
-  const keyRes = await pool.query(
-    'SELECT "apiKey" FROM "UserApiKey" WHERE "userId" = $1 AND provider = $2',
-    [ctx.userId, "openai"]
-  )
-  ctx.apiKey = keyRes.rows[0]?.apiKey || process.env.OPENAI_API_KEY
-  if (!ctx.apiKey) throw new Error("No OpenAI API key configured")
-
-  // Get or create conversation
+/**
+ * Shared middleware: Get or create conversation, load history
+ * @param {object} ctx - Must have: userId, channelType, channelPeer, text
+ */
+async function getOrCreateConvo(ctx) {
   const convoRes = await pool.query(
     'SELECT id, "aiModel" FROM "Conversation" WHERE "userId" = $1 AND "channelType" = $2 AND "channelPeer" = $3 ORDER BY "updatedAt" DESC LIMIT 1',
-    [ctx.userId, "telegram", ctx.chatId]
+    [ctx.userId, ctx.channelType, ctx.channelPeer]
   )
 
   ctx.now = new Date().toISOString()
@@ -310,51 +240,40 @@ async function sessionMiddleware(ctx) {
     ctx.aiModel = "gpt-4o-mini"
     await pool.query(
       'INSERT INTO "Conversation" (id, "userId", "channelType", "channelPeer", title, "aiModel", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-      [ctx.convoId, ctx.userId, "telegram", ctx.chatId, ctx.text.slice(0, 50), ctx.aiModel, ctx.now, ctx.now]
+      [ctx.convoId, ctx.userId, ctx.channelType, ctx.channelPeer, ctx.text.slice(0, 50), ctx.aiModel, ctx.now, ctx.now]
     )
   }
+}
 
-  // Load recent history (last 10 messages for context — 5 exchanges)
+async function loadHistory(ctx) {
   const historyRes = await pool.query(
     'SELECT role, content FROM "Message" WHERE "conversationId" = $1 ORDER BY "createdAt" DESC LIMIT 10',
     [ctx.convoId]
   )
   ctx.history = historyRes.rows.reverse()
-
-  console.log(`[MW:Session] Conversation ${ctx.convoId.slice(0, 8)}... | ${ctx.history.length} prior messages`)
 }
 
-// ── MW 3: Context — Enrich with date/time and metadata ──────────────
+async function callAI(ctx) {
+  // Get OpenAI API key
+  const keyRes = await pool.query(
+    'SELECT "apiKey" FROM "UserApiKey" WHERE "userId" = $1 AND provider = $2',
+    [ctx.userId, "openai"]
+  )
+  const apiKey = keyRes.rows[0]?.apiKey || process.env.OPENAI_API_KEY
+  if (!apiKey) throw new Error("No OpenAI API key configured")
 
-async function contextMiddleware(ctx) {
-  // Nothing extra needed here for now — the system prompt handles date/time.
-  // This middleware is a placeholder for future enrichment:
-  //   - User preferences
-  //   - Location data
-  //   - Custom knowledge base lookup
-  //   - Rate limiting checks
-  //   - Language detection
-  ctx.toolsUsed = []
-}
+  const openai = new OpenAI({ apiKey })
 
-// ── MW 4: AI — Call OpenAI with tools, handle tool-call loop ────────
-
-async function aiMiddleware(ctx) {
-  const openai = new OpenAI({ apiKey: ctx.apiKey })
-
-  // Build messages array
   const messages = [
-    { role: "system", content: buildSystemPrompt() },
+    { role: "system", content: buildSystemPrompt(ctx.channelName || ctx.channelType) },
     ...ctx.history.map((m) => ({ role: m.role, content: m.content })),
     { role: "user", content: ctx.text },
   ]
 
-  // OpenAI tool definitions
   const tools = TOOLS.map((t) => t.definition)
-
-  // Tool-call loop: AI can call tools, we execute them, feed results back
-  let maxRounds = 3 // prevent infinite loops
+  let maxRounds = 3
   let round = 0
+  ctx.toolsUsed = ctx.toolsUsed || []
 
   while (round < maxRounds) {
     round++
@@ -366,36 +285,30 @@ async function aiMiddleware(ctx) {
       max_tokens: 1024,
     }
 
-    // Only include tools on first round (or if AI requested more)
     if (tools.length > 0) {
       params.tools = tools
-      params.tool_choice = round === 1 ? "auto" : "auto"
+      params.tool_choice = "auto"
     }
 
     console.log(`[MW:AI] Round ${round} — sending to ${ctx.aiModel}...`)
     const completion = await openai.chat.completions.create(params)
     const choice = completion.choices[0]
 
-    // If AI wants to call tools
     if (choice.finish_reason === "tool_calls" || choice.message.tool_calls?.length > 0) {
-      // Add the assistant message with tool calls
       messages.push(choice.message)
 
-      // Execute each tool call
       for (const toolCall of choice.message.tool_calls) {
         const toolName = toolCall.function.name
         const toolArgs = JSON.parse(toolCall.function.arguments || "{}")
 
         console.log(`[MW:AI] Tool call: ${toolName}(${JSON.stringify(toolArgs).slice(0, 80)})`)
 
-        // Find the tool
         const tool = TOOLS.find((t) => t.definition.function.name === toolName)
         let result = "Tool not found."
 
         if (tool) {
           try {
-            // Keep typing indicator active during tool execution
-            tgTyping(ctx.chatId)
+            if (ctx.onTyping) ctx.onTyping()
             result = await tool.execute(toolArgs)
             ctx.toolsUsed.push(toolName)
           } catch (err) {
@@ -404,19 +317,15 @@ async function aiMiddleware(ctx) {
           }
         }
 
-        // Add tool result to messages
         messages.push({
           role: "tool",
           tool_call_id: toolCall.id,
           content: result,
         })
       }
-
-      // Continue the loop — AI will process tool results
       continue
     }
 
-    // AI gave a final text response
     ctx.reply = choice.message.content || "Sorry, I couldn't generate a response."
     break
   }
@@ -431,37 +340,49 @@ async function aiMiddleware(ctx) {
   )
 }
 
-// ── MW 5: Store — Save messages to database ─────────────────────────
-
-async function storeMiddleware(ctx) {
+async function storeMessages(ctx) {
   const saveNow = new Date().toISOString()
 
-  // Save user message
   await pool.query(
     'INSERT INTO "Message" (id, "conversationId", role, content, "createdAt") VALUES ($1, $2, $3, $4, $5)',
     [cuid(), ctx.convoId, "user", ctx.text, ctx.now]
   )
 
-  // Save AI response
   await pool.query(
     'INSERT INTO "Message" (id, "conversationId", role, content, "createdAt") VALUES ($1, $2, $3, $4, $5)',
     [cuid(), ctx.convoId, "assistant", ctx.reply, saveNow]
   )
 
-  // Update conversation timestamp
   await pool.query('UPDATE "Conversation" SET "updatedAt" = $1 WHERE id = $2', [saveNow, ctx.convoId])
 }
 
-// ── MW 6: Send — Deliver reply to Telegram ──────────────────────────
-
-async function sendMiddleware(ctx) {
-  await tgSend(ctx.chatId, ctx.reply, ctx.messageId)
+/**
+ * Full shared pipeline: session → convo → history → AI → store
+ */
+async function processSharedPipeline(ctx) {
+  await getOrCreateConvo(ctx)
+  await loadHistory(ctx)
+  await callAI(ctx)
+  await storeMessages(ctx)
 }
 
-// ── Telegram Helpers ─────────────────────────────────────────────────
+// ── Helper: write channel event to DB ────────────────────────────────
+
+async function writeChannelEvent(userId, channelType, eventType, payload) {
+  await pool.query(
+    'INSERT INTO channel_events (id, user_id, channel_type, event_type, payload, created_at) VALUES ($1, $2, $3, $4, $5, NOW())',
+    [cuid(), userId, channelType, eventType, payload || null]
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// CHANNEL: TELEGRAM
+// ══════════════════════════════════════════════════════════════════════
+
+let TG_BOT_TOKEN = ""
+const TG = (method) => `https://api.telegram.org/bot${TG_BOT_TOKEN}/${method}`
 
 async function tgSend(chatId, text, replyToId) {
-  // Split long messages (Telegram limit: 4096 chars)
   const chunks = []
   for (let i = 0; i < text.length; i += 4000) {
     chunks.push(text.slice(i, i + 4000))
@@ -500,80 +421,74 @@ function tgTyping(chatId) {
   }).catch(() => {})
 }
 
-// ── Long-Polling Loop ────────────────────────────────────────────────
+async function processTelegramMessage(msg, tgUserId) {
+  const chatId = String(msg.chat.id)
+  const text = (msg.text || "").trim()
+  if (!text) return
 
-async function pollLoop(offset) {
-  while (true) {
-    try {
-      const url = `${TG("getUpdates")}?offset=${offset}&timeout=25&allowed_updates=${encodeURIComponent('["message","edited_message"]')}`
-      const res = await fetch(url, { signal: AbortSignal.timeout(35000) })
-      const data = await res.json()
+  console.log(`[TG:Receive] From ${msg.from?.first_name || "User"} (${chatId}): "${text.slice(0, 60)}"`)
 
-      if (data.ok && Array.isArray(data.result)) {
-        for (const update of data.result) {
-          offset = update.update_id + 1
-          const msg = update.message || update.edited_message
-          if (!msg?.text) continue
+  const ctx = {
+    channelType: "telegram",
+    channelName: "Telegram",
+    channelPeer: chatId,
+    text,
+    startTime: Date.now(),
+    userId: tgUserId,
+    toolsUsed: [],
+    onTyping: () => tgTyping(chatId),
+  }
 
-          // Handle /start command
-          if (msg.text === "/start") {
-            await tgSend(
-              String(msg.chat.id),
-              "Welcome to DMMS AI! I'm your smart AI assistant.\n\nI can answer questions, search the web, give you news, weather, and more.\n\nJust send me any message!\n\nCommands:\n/new — Start a fresh conversation\n\nPowered by DMMS AI — Every Messenger is AI Now."
-            )
-            continue
-          }
-
-          // Handle /new command (reset conversation)
-          if (msg.text === "/new") {
-            await tgSend(String(msg.chat.id), "Fresh start! Send me anything.")
-            continue
-          }
-
-          // Show typing indicator then process
-          tgTyping(String(msg.chat.id))
-          processMessage(msg).catch((err) => {
-            console.error("[Bot] Unhandled:", err.message)
-          })
-        }
-      }
-    } catch (err) {
-      if (err.name !== "AbortError" && err.name !== "TimeoutError") {
-        console.error("[Bot] Poll error:", err.message)
-      }
-      await new Promise((r) => setTimeout(r, 3000))
-    }
+  try {
+    await processSharedPipeline(ctx)
+    await tgSend(chatId, ctx.reply, msg.message_id)
+    const preview = (s) => (s || "").slice(0, 50).replace(/\n/g, " ")
+    console.log(`[TG] ${msg.from?.first_name}: "${preview(text)}" → "${preview(ctx.reply)}"`)
+  } catch (err) {
+    console.error("[TG] Pipeline error:", err.message)
+    await tgSend(chatId, "Sorry, something went wrong. Please try again.").catch(() => {})
   }
 }
 
-// ── Main ─────────────────────────────────────────────────────────────
-
-async function main() {
-  console.log("[Bot] DMMS AI v2.0 — Intelligent Middleware Engine")
-  console.log("[Bot] Pipeline: Receive → Session → Context → AI (+ Tools) → Store → Send")
-  console.log(`[Bot] Tools: ${TOOLS.map((t) => t.definition.function.name).join(", ")}`)
-
+async function startTelegram() {
   // Resolve bot token
-  BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || ""
-  if (!BOT_TOKEN) {
+  TG_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || ""
+  let tgUserId = null
+
+  if (!TG_BOT_TOKEN) {
     try {
       const res = await pool.query(
-        'SELECT config FROM "UserChannel" WHERE "channelType" = $1 AND enabled = true LIMIT 1',
+        'SELECT "userId", config FROM "UserChannel" WHERE "channelType" = $1 AND enabled = true LIMIT 1',
         ["telegram"]
       )
       if (res.rows.length > 0) {
+        tgUserId = res.rows[0].userId
         const raw = res.rows[0].config
         const config = typeof raw === "string" ? JSON.parse(raw) : raw
-        if (config?.botToken) BOT_TOKEN = config.botToken
+        if (config?.botToken) TG_BOT_TOKEN = config.botToken
       }
     } catch (err) {
-      console.error("[Bot] DB error:", err.message)
+      console.error("[TG] DB error:", err.message)
     }
   }
 
-  if (!BOT_TOKEN) {
-    console.error("[Bot] No bot token! Set TELEGRAM_BOT_TOKEN or configure in dashboard.")
-    process.exit(1)
+  if (!TG_BOT_TOKEN) {
+    console.log("[TG] No bot token configured — skipping Telegram")
+    return
+  }
+
+  // If we didn't get userId from DB, find it
+  if (!tgUserId) {
+    const res = await pool.query(
+      'SELECT "userId" FROM "UserChannel" WHERE "channelType" = $1 AND enabled = true LIMIT 1',
+      ["telegram"]
+    )
+    tgUserId = res.rows[0]?.userId
+  }
+
+  if (!tgUserId) {
+    console.log("[TG] No user has Telegram enabled — skipping")
+    return
   }
 
   // Delete any webhook (can't use both webhook and polling)
@@ -583,17 +498,395 @@ async function main() {
   const me = await fetch(TG("getMe"))
   const meData = await me.json()
   if (!meData.ok) {
-    console.error("[Bot] Invalid token:", meData.description)
-    process.exit(1)
+    console.error("[TG] Invalid token:", meData.description)
+    return
   }
 
-  console.log(`[Bot] Connected as @${meData.result.username}`)
-  console.log("[Bot] Waiting for messages...")
+  console.log(`[TG] Connected as @${meData.result.username}`)
 
-  await pollLoop(0)
+  // Long-polling loop
+  let offset = 0
+  const pollLoop = async () => {
+    while (true) {
+      try {
+        const url = `${TG("getUpdates")}?offset=${offset}&timeout=25&allowed_updates=${encodeURIComponent('["message","edited_message"]')}`
+        const res = await fetch(url, { signal: AbortSignal.timeout(35000) })
+        const data = await res.json()
+
+        if (data.ok && Array.isArray(data.result)) {
+          for (const update of data.result) {
+            offset = update.update_id + 1
+            const msg = update.message || update.edited_message
+            if (!msg?.text) continue
+
+            if (msg.text === "/start") {
+              await tgSend(
+                String(msg.chat.id),
+                "Welcome to DMMS AI! I'm your smart AI assistant.\n\nI can answer questions, search the web, give you news, weather, and more.\n\nJust send me any message!\n\nCommands:\n/new — Start a fresh conversation\n\nPowered by DMMS AI — Every Messenger is AI Now."
+              )
+              continue
+            }
+
+            if (msg.text === "/new") {
+              await tgSend(String(msg.chat.id), "Fresh start! Send me anything.")
+              continue
+            }
+
+            tgTyping(String(msg.chat.id))
+            processTelegramMessage(msg, tgUserId).catch((err) => {
+              console.error("[TG] Unhandled:", err.message)
+            })
+          }
+        }
+      } catch (err) {
+        if (err.name !== "AbortError" && err.name !== "TimeoutError") {
+          console.error("[TG] Poll error:", err.message)
+        }
+        await new Promise((r) => setTimeout(r, 3000))
+      }
+    }
+  }
+
+  pollLoop()
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// CHANNEL: WHATSAPP (Baileys — QR Code Scan)
+// ══════════════════════════════════════════════════════════════════════
+
+let waSocket = null
+
+async function startWhatsApp() {
+  let waUserId = null
+  let waChannelConfig = null
+
+  try {
+    const res = await pool.query(
+      'SELECT "userId", config FROM "UserChannel" WHERE "channelType" = $1 AND enabled = true LIMIT 1',
+      ["whatsapp"]
+    )
+    if (res.rows.length === 0) {
+      console.log("[WA] No WhatsApp channel enabled — skipping")
+      return
+    }
+    waUserId = res.rows[0].userId
+    const raw = res.rows[0].config
+    waChannelConfig = typeof raw === "string" ? JSON.parse(raw) : raw
+
+    // If config has accessToken, it's Business API mode — skip Baileys
+    if (waChannelConfig?.accessToken) {
+      console.log("[WA] WhatsApp Business API mode detected — using webhook, not Baileys")
+      return
+    }
+  } catch (err) {
+    console.error("[WA] DB error:", err.message)
+    return
+  }
+
+  console.log(`[WA] Starting WhatsApp (Baileys) for user ${waUserId.slice(0, 8)}...`)
+
+  await connectWhatsApp(waUserId)
+}
+
+async function connectWhatsApp(userId, retryCount = 0) {
+  try {
+    const { state, saveCreds, pool: authPool } = await usePgAuthState(
+      process.env.DATABASE_URL,
+      userId
+    )
+
+    const sock = makeWASocket({
+      auth: state,
+      printQRInTerminal: false,
+      browser: ["DMMS AI", "Chrome", "1.0.0"],
+      connectTimeoutMs: 60000,
+    })
+
+    waSocket = sock
+
+    // Handle connection updates
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect, qr } = update
+
+      if (qr) {
+        console.log("[WA] QR code received — writing to channel_events")
+        await writeChannelEvent(userId, "whatsapp", "qr", qr)
+      }
+
+      if (connection === "close") {
+        waSocket = null
+        const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut
+
+        console.log(`[WA] Connection closed (code: ${statusCode})`)
+        await writeChannelEvent(userId, "whatsapp", "disconnected", String(statusCode))
+
+        // Update channel status in DB
+        await pool.query(
+          'UPDATE "UserChannel" SET status = $1, "updatedAt" = NOW() WHERE "userId" = $2 AND "channelType" = $3',
+          ["disconnected", userId, "whatsapp"]
+        ).catch(() => {})
+
+        if (shouldReconnect && retryCount < 5) {
+          const delay = Math.min(3000 * Math.pow(2, retryCount), 30000)
+          console.log(`[WA] Reconnecting in ${delay / 1000}s (attempt ${retryCount + 1})...`)
+          setTimeout(() => connectWhatsApp(userId, retryCount + 1), delay)
+        } else if (!shouldReconnect) {
+          console.log("[WA] Logged out — clearing auth state")
+          await pool.query("DELETE FROM baileys_auth WHERE user_id = $1", [userId])
+          await writeChannelEvent(userId, "whatsapp", "logged_out", null)
+        }
+      }
+
+      if (connection === "open") {
+        console.log("[WA] Connected successfully!")
+        await writeChannelEvent(userId, "whatsapp", "connected", null)
+
+        // Update channel status in DB
+        await pool.query(
+          'UPDATE "UserChannel" SET status = $1, "updatedAt" = NOW() WHERE "userId" = $2 AND "channelType" = $3',
+          ["connected", userId, "whatsapp"]
+        ).catch(() => {})
+      }
+    })
+
+    // Handle credential updates
+    sock.ev.on("creds.update", saveCreds)
+
+    // Handle incoming messages
+    sock.ev.on("messages.upsert", async ({ messages: msgs, type }) => {
+      if (type !== "notify") return
+
+      for (const msg of msgs) {
+        // Skip messages sent by us
+        if (msg.key.fromMe) continue
+
+        // Extract text from message
+        const text =
+          msg.message?.conversation ||
+          msg.message?.extendedTextMessage?.text ||
+          msg.message?.imageMessage?.caption ||
+          msg.message?.videoMessage?.caption ||
+          ""
+
+        if (!text.trim()) continue
+
+        const jid = msg.key.remoteJid
+        const pushName = msg.pushName || "User"
+        const peer = jid.replace(/@s\.whatsapp\.net$/, "")
+
+        console.log(`[WA:Receive] From ${pushName} (${peer}): "${text.slice(0, 60)}"`)
+
+        const ctx = {
+          channelType: "whatsapp",
+          channelName: "WhatsApp",
+          channelPeer: peer,
+          text: text.trim(),
+          startTime: Date.now(),
+          userId,
+          toolsUsed: [],
+          onTyping: () => {
+            sock.sendPresenceUpdate("composing", jid).catch(() => {})
+          },
+        }
+
+        try {
+          await processSharedPipeline(ctx)
+
+          // Send reply
+          const chunks = []
+          for (let i = 0; i < ctx.reply.length; i += 4000) {
+            chunks.push(ctx.reply.slice(i, i + 4000))
+          }
+          for (const chunk of chunks) {
+            await sock.sendMessage(jid, { text: chunk })
+          }
+
+          sock.sendPresenceUpdate("available", jid).catch(() => {})
+
+          const preview = (s) => (s || "").slice(0, 50).replace(/\n/g, " ")
+          console.log(`[WA] ${pushName}: "${preview(text)}" → "${preview(ctx.reply)}"`)
+        } catch (err) {
+          console.error("[WA] Pipeline error:", err.message)
+          await sock.sendMessage(jid, { text: "Sorry, something went wrong. Please try again." }).catch(() => {})
+        }
+      }
+    })
+  } catch (err) {
+    console.error("[WA] Fatal error:", err.message)
+    if (retryCount < 5) {
+      const delay = Math.min(3000 * Math.pow(2, retryCount), 30000)
+      console.log(`[WA] Retrying in ${delay / 1000}s...`)
+      setTimeout(() => connectWhatsApp(userId, retryCount + 1), delay)
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// CHANNEL: DISCORD
+// ══════════════════════════════════════════════════════════════════════
+
+async function startDiscord() {
+  let discordUserId = null
+  let discordToken = null
+
+  try {
+    const res = await pool.query(
+      'SELECT "userId", config FROM "UserChannel" WHERE "channelType" = $1 AND enabled = true LIMIT 1',
+      ["discord"]
+    )
+    if (res.rows.length === 0) {
+      console.log("[DC] No Discord channel enabled — skipping")
+      return
+    }
+
+    discordUserId = res.rows[0].userId
+    const raw = res.rows[0].config
+    const config = typeof raw === "string" ? JSON.parse(raw) : raw
+    discordToken = config?.botToken || process.env.DISCORD_BOT_TOKEN
+  } catch (err) {
+    console.error("[DC] DB error:", err.message)
+    return
+  }
+
+  if (!discordToken) {
+    console.log("[DC] No Discord bot token configured — skipping")
+    return
+  }
+
+  console.log("[DC] Starting Discord bot...")
+
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.DirectMessages,
+    ],
+  })
+
+  client.on("ready", () => {
+    console.log(`[DC] Connected as ${client.user.tag}`)
+    writeChannelEvent(discordUserId, "discord", "connected", client.user.tag).catch(() => {})
+
+    pool.query(
+      'UPDATE "UserChannel" SET status = $1, "updatedAt" = NOW() WHERE "userId" = $2 AND "channelType" = $3',
+      ["connected", discordUserId, "discord"]
+    ).catch(() => {})
+  })
+
+  client.on("messageCreate", async (message) => {
+    // Skip bot's own messages and other bots
+    if (message.author.bot) return
+
+    const text = message.content?.trim()
+    if (!text) return
+
+    // Use channel ID + author ID as peer for conversations
+    const peer = `${message.channel.id}:${message.author.id}`
+
+    console.log(`[DC:Receive] From ${message.author.username} in #${message.channel.name || "DM"}: "${text.slice(0, 60)}"`)
+
+    const ctx = {
+      channelType: "discord",
+      channelName: "Discord",
+      channelPeer: peer,
+      text,
+      startTime: Date.now(),
+      userId: discordUserId,
+      toolsUsed: [],
+      onTyping: () => {
+        message.channel.sendTyping().catch(() => {})
+      },
+    }
+
+    try {
+      message.channel.sendTyping().catch(() => {})
+      await processSharedPipeline(ctx)
+
+      // Split long messages (Discord limit: 2000 chars)
+      const chunks = []
+      for (let i = 0; i < ctx.reply.length; i += 1900) {
+        chunks.push(ctx.reply.slice(i, i + 1900))
+      }
+
+      for (let i = 0; i < chunks.length; i++) {
+        if (i === 0) {
+          await message.reply(chunks[i])
+        } else {
+          await message.channel.send(chunks[i])
+        }
+      }
+
+      const preview = (s) => (s || "").slice(0, 50).replace(/\n/g, " ")
+      console.log(`[DC] ${message.author.username}: "${preview(text)}" → "${preview(ctx.reply)}"`)
+    } catch (err) {
+      console.error("[DC] Pipeline error:", err.message)
+      await message.reply("Sorry, something went wrong. Please try again.").catch(() => {})
+    }
+  })
+
+  client.on("error", (err) => {
+    console.error("[DC] Client error:", err.message)
+  })
+
+  try {
+    await client.login(discordToken)
+  } catch (err) {
+    console.error("[DC] Login failed:", err.message)
+    writeChannelEvent(discordUserId, "discord", "error", err.message).catch(() => {})
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// MAIN
+// ══════════════════════════════════════════════════════════════════════
+
+async function main() {
+  console.log("╔══════════════════════════════════════════════════════╗")
+  console.log("║  DMMS AI — Multi-Channel Gateway v3.0               ║")
+  console.log("║  Every Messenger is AI Now.                          ║")
+  console.log("╚══════════════════════════════════════════════════════╝")
+  console.log(`[Gateway] Tools: ${TOOLS.map((t) => t.definition.function.name).join(", ")}`)
+  console.log("[Gateway] Starting channels...")
+
+  // Start all channels concurrently
+  const results = await Promise.allSettled([
+    startTelegram(),
+    startWhatsApp(),
+    startDiscord(),
+  ])
+
+  for (const [i, result] of results.entries()) {
+    const names = ["Telegram", "WhatsApp", "Discord"]
+    if (result.status === "rejected") {
+      console.error(`[Gateway] ${names[i]} failed to start:`, result.reason?.message || result.reason)
+    }
+  }
+
+  console.log("[Gateway] All channels initialized. Waiting for messages...")
+
+  // Keep the process alive
+  process.on("SIGINT", async () => {
+    console.log("\n[Gateway] Shutting down gracefully...")
+    if (waSocket) {
+      waSocket.end()
+    }
+    await pool.end()
+    process.exit(0)
+  })
+
+  process.on("SIGTERM", async () => {
+    console.log("[Gateway] SIGTERM received, shutting down...")
+    if (waSocket) {
+      waSocket.end()
+    }
+    await pool.end()
+    process.exit(0)
+  })
 }
 
 main().catch((err) => {
-  console.error("[Bot] Fatal:", err)
+  console.error("[Gateway] Fatal:", err)
   process.exit(1)
 })
