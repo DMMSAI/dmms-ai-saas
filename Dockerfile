@@ -4,11 +4,17 @@ FROM node:22-alpine AS base
 FROM base AS builder
 WORKDIR /app
 
+# Alpine needs git + build tools for native deps (libsignal, sharp)
+RUN apk add --no-cache git python3 make g++
+
 COPY package*.json ./
 RUN npm ci
 
 COPY . .
 RUN npm run build
+
+# ── Prune dev dependencies ───────────────────────────────────────────
+RUN npm prune --omit=dev
 
 # ── Production stage ─────────────────────────────────────────────────
 FROM base AS runner
@@ -16,17 +22,15 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Install production deps (needed by bot.mjs: baileys, discord.js, pg, openai, etc.)
-COPY package*.json ./
-RUN npm ci --omit=dev
-
 # Copy standalone server
 COPY --from=builder /app/.next/standalone ./
 # Copy static files
 COPY --from=builder /app/.next/static ./.next/static
 # Copy public assets
 COPY --from=builder /app/public ./public
-# Copy Baileys auth adapter (used by bot.mjs)
+# Copy production node_modules (for bot.mjs deps: baileys, discord.js, pg, etc.)
+COPY --from=builder /app/node_modules ./node_modules
+# Copy Baileys auth adapter
 COPY --from=builder /app/lib/baileys-auth-pg.mjs ./lib/baileys-auth-pg.mjs
 
 EXPOSE 3000
