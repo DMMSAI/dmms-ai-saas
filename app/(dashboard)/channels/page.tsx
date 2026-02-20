@@ -226,13 +226,15 @@ const CHANNELS: ChannelInfo[] = [
   {
     type: "wechat",
     name: "WeChat",
-    description: "Connect via WeChat Official Account",
+    description: "Connect via WeChat Official Account API or scan QR to link",
     configFields: [
       { key: "appId", label: "App ID", placeholder: "WeChat App ID" },
       { key: "appSecret", label: "App Secret", placeholder: "WeChat App Secret", type: "password" },
       { key: "token", label: "Token", placeholder: "Verification token" },
     ],
-    connectionMethod: "oauth",
+    connectionMethod: "token",
+    hasPersonalMode: true,
+    personalDescription: "Scan QR code with WeChat to link your account (Wechaty)",
   },
   {
     type: "rocketchat",
