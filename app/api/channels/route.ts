@@ -23,17 +23,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const { channelType, config, enabled } = await req.json()
+  const { channelType, config, enabled, connectionMode } = await req.json()
   if (!channelType) {
     return NextResponse.json({ error: "channelType required" }, { status: 400 })
   }
 
+  const mode = connectionMode || "business"
   const now = new Date().toISOString()
   const configStr = JSON.stringify(config || {})
 
   const existing = await pool.query(
-    'SELECT id FROM "UserChannel" WHERE "userId" = $1 AND "channelType" = $2',
-    [session.user.id, channelType]
+    'SELECT id FROM "UserChannel" WHERE "userId" = $1 AND "channelType" = $2 AND "connectionMode" = $3',
+    [session.user.id, channelType, mode]
   )
 
   let channel
@@ -46,8 +47,8 @@ export async function POST(req: Request) {
   } else {
     const id = cuid()
     const res = await pool.query(
-      'INSERT INTO "UserChannel" (id, "userId", "channelType", config, enabled, status, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *',
-      [id, session.user.id, channelType, configStr, enabled ?? false, "disconnected", now, now]
+      'INSERT INTO "UserChannel" (id, "userId", "channelType", "connectionMode", config, enabled, status, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *',
+      [id, session.user.id, channelType, mode, configStr, enabled ?? false, "disconnected", now, now]
     )
     channel = res.rows[0]
   }
@@ -61,14 +62,16 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const { channelType } = await req.json()
+  const { channelType, connectionMode } = await req.json()
   if (!channelType) {
     return NextResponse.json({ error: "channelType required" }, { status: 400 })
   }
 
+  const mode = connectionMode || "business"
+
   await pool.query(
-    'DELETE FROM "UserChannel" WHERE "userId" = $1 AND "channelType" = $2',
-    [session.user.id, channelType]
+    'DELETE FROM "UserChannel" WHERE "userId" = $1 AND "channelType" = $2 AND "connectionMode" = $3',
+    [session.user.id, channelType, mode]
   )
 
   return NextResponse.json({ ok: true })

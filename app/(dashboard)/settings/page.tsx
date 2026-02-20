@@ -10,33 +10,34 @@ import { Badge } from "@/components/ui/badge"
 export default function SettingsPage() {
   const { data: session } = useSession()
   const [openaiKey, setOpenaiKey] = useState("")
-  const [savedKey, setSavedKey] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const [geminiKey, setGeminiKey] = useState("")
+  const [savedKeys, setSavedKeys] = useState<Record<string, boolean>>({})
+  const [savingOpenai, setSavingOpenai] = useState(false)
+  const [savingGemini, setSavingGemini] = useState(false)
 
   useEffect(() => {
-    // Check if user has an API key saved
     fetch("/api/settings/apikeys")
       .then((r) => r.json())
       .then((data) => {
-        if (data?.openai) {
-          setOpenaiKey("sk-••••••••••••••••")
-          setSavedKey(true)
-        }
+        setSavedKeys(data || {})
+        if (data?.openai) setOpenaiKey("sk-••••••••••••••••")
+        if (data?.gemini) setGeminiKey("AI••••••••••••••••")
       })
       .catch(() => {})
   }, [])
 
-  const saveApiKey = async () => {
-    if (!openaiKey || openaiKey.startsWith("sk-••")) return
+  const saveApiKey = async (provider: string, key: string, setSaving: (v: boolean) => void) => {
+    if (!key || key.includes("••")) return
     setSaving(true)
     try {
       await fetch("/api/settings/apikeys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: "openai", apiKey: openaiKey }),
+        body: JSON.stringify({ provider, apiKey: key }),
       })
-      setSavedKey(true)
-      setOpenaiKey("sk-••••••••••••••••")
+      setSavedKeys((prev) => ({ ...prev, [provider]: true }))
+      if (provider === "openai") setOpenaiKey("sk-••••••••••••••••")
+      if (provider === "gemini") setGeminiKey("AI••••••••••••••••")
     } finally {
       setSaving(false)
     }
@@ -46,7 +47,7 @@ export default function SettingsPage() {
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-zinc-100">Settings</h1>
-        <p className="text-sm text-zinc-400">Manage your account and API configuration</p>
+        <p className="text-sm text-zinc-400">Manage your account and AI configuration</p>
       </div>
 
       {/* Profile */}
@@ -69,15 +70,17 @@ export default function SettingsPage() {
       <Card>
         <CardTitle className="flex items-center gap-2">
           API Keys
-          {savedKey && <Badge variant="success">Configured</Badge>}
+          {(savedKeys.openai || savedKeys.gemini) && <Badge variant="success">Configured</Badge>}
         </CardTitle>
         <CardDescription>
-          Add your AI provider API keys. Keys are stored encrypted.
+          Add your AI provider API keys. Keys are stored securely.
         </CardDescription>
-        <div className="mt-4 space-y-4">
+        <div className="mt-4 space-y-6">
+          {/* OpenAI */}
           <div>
-            <label className="mb-1 block text-xs font-medium text-zinc-400">
+            <label className="mb-1 flex items-center gap-2 text-xs font-medium text-zinc-400">
               OpenAI API Key
+              {savedKeys.openai && <Badge variant="success" className="text-[10px]">Saved</Badge>}
             </label>
             <div className="flex gap-2">
               <Input
@@ -85,15 +88,18 @@ export default function SettingsPage() {
                 value={openaiKey}
                 onChange={(e) => {
                   setOpenaiKey(e.target.value)
-                  if (e.target.value !== "sk-••••••••••••••••") setSavedKey(false)
+                  if (!e.target.value.includes("••")) setSavedKeys((p) => ({ ...p, openai: false }))
                 }}
                 placeholder="sk-..."
                 onFocus={() => {
-                  if (openaiKey.startsWith("sk-••")) setOpenaiKey("")
+                  if (openaiKey.includes("••")) setOpenaiKey("")
                 }}
               />
-              <Button onClick={saveApiKey} disabled={saving || !openaiKey || openaiKey.startsWith("sk-••")}>
-                {saving ? "Saving..." : "Save"}
+              <Button
+                onClick={() => saveApiKey("openai", openaiKey, setSavingOpenai)}
+                disabled={savingOpenai || !openaiKey || openaiKey.includes("••")}
+              >
+                {savingOpenai ? "Saving..." : "Save"}
               </Button>
             </div>
             <p className="mt-1 text-xs text-zinc-500">
@@ -103,20 +109,62 @@ export default function SettingsPage() {
               </a>
             </p>
           </div>
+
+          {/* Gemini */}
+          <div>
+            <label className="mb-1 flex items-center gap-2 text-xs font-medium text-zinc-400">
+              Google Gemini API Key
+              {savedKeys.gemini && <Badge variant="success" className="text-[10px]">Saved</Badge>}
+            </label>
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                value={geminiKey}
+                onChange={(e) => {
+                  setGeminiKey(e.target.value)
+                  if (!e.target.value.includes("••")) setSavedKeys((p) => ({ ...p, gemini: false }))
+                }}
+                placeholder="AIza..."
+                onFocus={() => {
+                  if (geminiKey.includes("••")) setGeminiKey("")
+                }}
+              />
+              <Button
+                onClick={() => saveApiKey("gemini", geminiKey, setSavingGemini)}
+                disabled={savingGemini || !geminiKey || geminiKey.includes("••")}
+              >
+                {savingGemini ? "Saving..." : "Save"}
+              </Button>
+            </div>
+            <p className="mt-1 text-xs text-zinc-500">
+              Get your key from{" "}
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-teal-500 hover:underline">
+                aistudio.google.com
+              </a>
+            </p>
+          </div>
         </div>
       </Card>
 
       {/* AI Model */}
       <Card>
         <CardTitle>AI Model</CardTitle>
-        <CardDescription>Select your default AI model</CardDescription>
-        <div className="mt-4">
+        <CardDescription>Select your default AI provider and model</CardDescription>
+        <div className="mt-4 space-y-3">
           <select className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-teal-500">
-            <option value="gpt-4o">GPT-4o (Recommended)</option>
-            <option value="gpt-4o-mini">GPT-4o Mini (Faster)</option>
-            <option value="gpt-4-turbo">GPT-4 Turbo</option>
-            <option value="gpt-3.5-turbo">GPT-3.5 Turbo (Cheapest)</option>
+            <optgroup label="OpenAI">
+              <option value="openai:gpt-5.2-chat-latest">GPT-5.2 (Latest)</option>
+              <option value="openai:gpt-4o">GPT-4o (Recommended)</option>
+              <option value="openai:gpt-4o-mini">GPT-4o Mini (Faster)</option>
+            </optgroup>
+            <optgroup label="Google Gemini">
+              <option value="gemini:gemini-2.5-flash">Gemini 2.5 Flash (Fast)</option>
+              <option value="gemini:gemini-2.5-pro">Gemini 2.5 Pro</option>
+            </optgroup>
           </select>
+          <p className="text-xs text-zinc-500">
+            This applies to web chat. Messenger channels use the model configured at the time of conversation creation.
+          </p>
         </div>
       </Card>
     </div>

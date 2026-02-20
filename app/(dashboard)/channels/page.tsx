@@ -12,6 +12,9 @@ interface ChannelInfo {
   description: string
   configFields: { key: string; label: string; placeholder: string; type?: string }[]
   connectionMethod: string
+  /** Whether this channel supports personal (QR) mode */
+  hasPersonalMode?: boolean
+  personalDescription?: string
 }
 
 const CHANNELS: ChannelInfo[] = [
@@ -25,9 +28,15 @@ const CHANNELS: ChannelInfo[] = [
   {
     type: "whatsapp",
     name: "WhatsApp",
-    description: "Scan QR code to link as WhatsApp Web device",
-    configFields: [],
-    connectionMethod: "qr",
+    description: "Connect via WhatsApp Business API or scan QR to link",
+    configFields: [
+      { key: "accessToken", label: "Access Token", placeholder: "WhatsApp Business API token" },
+      { key: "phoneNumberId", label: "Phone Number ID", placeholder: "e.g. 123456789012345" },
+      { key: "webhookVerifyToken", label: "Webhook Verify Token", placeholder: "Your verify token" },
+    ],
+    connectionMethod: "token",
+    hasPersonalMode: true,
+    personalDescription: "Scan QR code to link as WhatsApp Web device (Baileys)",
   },
   {
     type: "telegram",
@@ -154,19 +163,14 @@ const CHANNELS: ChannelInfo[] = [
   {
     type: "zalo",
     name: "Zalo",
-    description: "Connect via Zalo Bot API",
+    description: "Connect via Zalo Bot API or scan QR",
     configFields: [
       { key: "oaAccessToken", label: "OA Access Token", placeholder: "Zalo OA access token" },
       { key: "oaSecretKey", label: "OA Secret Key", placeholder: "Zalo OA secret key", type: "password" },
     ],
     connectionMethod: "token",
-  },
-  {
-    type: "zalo_personal",
-    name: "Zalo Personal",
-    description: "Connect personal Zalo via QR login",
-    configFields: [],
-    connectionMethod: "qr",
+    hasPersonalMode: true,
+    personalDescription: "Connect personal Zalo via QR login (zca-cli)",
   },
   {
     type: "mattermost",
@@ -255,6 +259,7 @@ const CHANNELS: ChannelInfo[] = [
 interface SavedChannel {
   id: string
   channelType: string
+  connectionMode?: string
   config: Record<string, string>
   enabled: boolean
   status: string
@@ -340,7 +345,11 @@ function QrScanCard({
     setStatus("connecting")
     setQrDataUrl(null)
     try {
-      const res = await fetch(`/api/channels/${channelType}/connect`, { method: "POST" })
+      const res = await fetch(`/api/channels/${channelType}/connect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connectionMode: "personal" }),
+      })
       const data = await res.json()
       if (data.ok) startPolling()
       else { setStatus("error"); setConnecting(false) }
@@ -361,22 +370,11 @@ function QrScanCard({
   }
 
   return (
-    <Card className="relative">
-      <div className="flex items-start justify-between">
-        <div>
-          <CardTitle className="flex items-center gap-2 text-base">
-            {channelName}
-            {status === "connected" && <Badge variant="success">Connected</Badge>}
-            {(status === "connecting" || status === "qr") && (
-              <Badge variant="outline" className="animate-pulse">Connecting...</Badge>
-            )}
-          </CardTitle>
-          <CardDescription className="mt-1">{description}</CardDescription>
-        </div>
-      </div>
+    <div className="space-y-3">
+      <p className="text-sm text-zinc-400">{description}</p>
 
       {status === "qr" && qrDataUrl && (
-        <div className="mt-4 flex flex-col items-center">
+        <div className="flex flex-col items-center">
           <div className="rounded-lg border border-zinc-700 bg-white p-2">
             <img src={qrDataUrl} alt={`${channelName} QR Code`} width={256} height={256} />
           </div>
@@ -387,29 +385,29 @@ function QrScanCard({
       )}
 
       {status === "connecting" && !qrDataUrl && (
-        <div className="mt-4 flex flex-col items-center gap-2">
+        <div className="flex flex-col items-center gap-2">
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-teal-500 border-t-transparent" />
           <p className="text-sm text-zinc-400">Waiting for QR code...</p>
         </div>
       )}
 
       {status === "connected" && (
-        <p className="mt-4 text-sm text-teal-400">
+        <p className="text-sm text-teal-400">
           {channelName} is linked and receiving messages. AI responds automatically.
         </p>
       )}
 
       {status === "logged_out" && (
-        <p className="mt-4 text-sm text-yellow-400">
+        <p className="text-sm text-yellow-400">
           Session logged out. Click Connect to re-link.
         </p>
       )}
 
       {status === "error" && (
-        <p className="mt-4 text-sm text-red-400">Connection error. Try again.</p>
+        <p className="text-sm text-red-400">Connection error. Try again.</p>
       )}
 
-      <div className="mt-4 flex gap-2">
+      <div className="flex gap-2">
         {status !== "connected" && status !== "qr" && status !== "connecting" && (
           <Button size="sm" onClick={handleConnect} disabled={connecting}>
             {connecting ? "Connecting..." : `Connect ${channelName}`}
@@ -419,7 +417,47 @@ function QrScanCard({
           <Button size="sm" variant="ghost" onClick={handleDisconnect}>Disconnect</Button>
         )}
       </div>
-    </Card>
+    </div>
+  )
+}
+
+// ── Mode Tab Component ───────────────────────────────────────────────
+
+function ModeTab({
+  activeMode,
+  onModeChange,
+  hasPersonalMode,
+}: {
+  activeMode: "business" | "personal"
+  onModeChange: (mode: "business" | "personal") => void
+  hasPersonalMode: boolean
+}) {
+  return (
+    <div className="mb-3 flex gap-1 rounded-lg bg-zinc-800/50 p-1">
+      <button
+        onClick={() => onModeChange("business")}
+        className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+          activeMode === "business"
+            ? "bg-zinc-700 text-zinc-100"
+            : "text-zinc-400 hover:text-zinc-300"
+        }`}
+      >
+        Business
+      </button>
+      <button
+        onClick={() => onModeChange("personal")}
+        disabled={!hasPersonalMode}
+        className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+          activeMode === "personal"
+            ? "bg-zinc-700 text-zinc-100"
+            : hasPersonalMode
+              ? "text-zinc-400 hover:text-zinc-300"
+              : "cursor-not-allowed text-zinc-600"
+        }`}
+      >
+        Personal
+      </button>
+    </div>
   )
 }
 
@@ -431,6 +469,7 @@ export default function ChannelsPage() {
   const [formData, setFormData] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
+  const [channelModes, setChannelModes] = useState<Record<string, "business" | "personal">>({})
 
   useEffect(() => {
     fetch("/api/channels")
@@ -446,14 +485,17 @@ export default function ChannelsPage() {
       .catch(() => {})
   }, [])
 
+  const getMode = (type: string) => channelModes[type] || "business"
+
   const save = async (channelType: string, enabled: boolean) => {
     setSaving(true)
     setStatusMessage(null)
+    const mode = getMode(channelType)
     try {
       const res = await fetch("/api/channels", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channelType, config: formData, enabled }),
+        body: JSON.stringify({ channelType, config: formData, enabled, connectionMode: mode }),
       })
       const updated = await res.json()
 
@@ -462,7 +504,7 @@ export default function ChannelsPage() {
       }
 
       setSavedChannels((prev) => {
-        const idx = prev.findIndex((c) => c.channelType === channelType)
+        const idx = prev.findIndex((c) => c.channelType === channelType && (c.connectionMode || "business") === mode)
         if (idx >= 0) {
           const next = [...prev]
           next[idx] = updated
@@ -507,15 +549,15 @@ export default function ChannelsPage() {
     }
   }
 
-  const getSavedChannel = (type: string) =>
-    savedChannels.find((c) => c.channelType === type)
+  const getSavedChannel = (type: string, mode?: string) =>
+    savedChannels.find((c) => c.channelType === type && (c.connectionMode || "business") === (mode || "business"))
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-zinc-100">Channels</h1>
         <p className="text-sm text-zinc-400">
-          Connect 24 messaging platforms to your AI assistant
+          Connect 24 messaging platforms to your AI assistant — Business or Personal mode
         </p>
       </div>
 
@@ -533,28 +575,9 @@ export default function ChannelsPage() {
 
       <div className="grid gap-4 sm:grid-cols-2">
         {CHANNELS.map((ch) => {
-          const saved = getSavedChannel(ch.type)
+          const mode = getMode(ch.type)
+          const saved = getSavedChannel(ch.type, mode)
           const isConfiguring = configuring === ch.type
-
-          // QR-based channels (WhatsApp, Zalo Personal)
-          if (ch.connectionMethod === "qr") {
-            return (
-              <QrScanCard
-                key={ch.type}
-                channelType={ch.type}
-                channelName={ch.name}
-                description={ch.description}
-                saved={saved}
-                onDisconnect={() => {
-                  setSavedChannels((prev) =>
-                    prev.map((c) =>
-                      c.channelType === ch.type ? { ...c, enabled: false, status: "disconnected" } : c
-                    )
-                  )
-                }}
-              />
-            )
-          }
 
           // Web Chat — always active
           if (ch.type === "web") {
@@ -569,68 +592,106 @@ export default function ChannelsPage() {
             )
           }
 
-          // Token/config-based channels
+          // Channels with dual mode support
           return (
             <Card key={ch.type} className="relative">
               <div className="flex items-start justify-between">
                 <div>
                   <CardTitle className="flex items-center gap-2 text-base">
                     {ch.name}
-                    {saved?.enabled && <Badge variant="success">Connected</Badge>}
+                    {saved?.enabled && saved?.status === "connected" && (
+                      <Badge variant="success">Connected</Badge>
+                    )}
+                    {saved?.enabled && saved?.status !== "connected" && (
+                      <Badge variant="outline">Enabled</Badge>
+                    )}
                   </CardTitle>
                   <CardDescription className="mt-1">{ch.description}</CardDescription>
                 </div>
               </div>
 
-              {isConfiguring && ch.configFields.length > 0 && (
-                <div className="mt-4 space-y-3">
-                  {ch.configFields.map((field) => (
-                    <div key={field.key}>
-                      <label className="mb-1 block text-xs font-medium text-zinc-400">
-                        {field.label}
-                      </label>
-                      <Input
-                        type={field.type || "text"}
-                        placeholder={field.placeholder}
-                        value={formData[field.key] || ""}
-                        onChange={(e) =>
-                          setFormData({ ...formData, [field.key]: e.target.value })
-                        }
-                      />
-                    </div>
-                  ))}
+              {/* Mode Tabs — only show for channels with personal mode */}
+              {ch.hasPersonalMode && (
+                <div className="mt-3">
+                  <ModeTab
+                    activeMode={mode}
+                    onModeChange={(m) => setChannelModes((prev) => ({ ...prev, [ch.type]: m }))}
+                    hasPersonalMode={true}
+                  />
                 </div>
               )}
 
-              <div className="mt-4 flex gap-2">
-                {isConfiguring ? (
-                  <>
-                    <Button size="sm" onClick={() => save(ch.type, true)} disabled={saving}>
-                      {saving ? "Connecting..." : "Save & Connect"}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => { setConfiguring(null); setFormData({}); setStatusMessage(null) }}
-                    >
-                      Cancel
-                    </Button>
-                  </>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => { setConfiguring(ch.type); setFormData(saved?.config || {}); setStatusMessage(null) }}
-                  >
-                    {saved ? "Configure" : "Set Up"}
-                  </Button>
-                )}
-                {saved?.enabled && !isConfiguring && (
-                  <Button size="sm" variant="ghost" onClick={() => save(ch.type, false)}>
-                    Disconnect
-                  </Button>
-                )}
-              </div>
+              {/* Personal Mode (QR Scan) */}
+              {ch.hasPersonalMode && mode === "personal" ? (
+                <QrScanCard
+                  channelType={ch.type}
+                  channelName={ch.name}
+                  description={ch.personalDescription || "Connect via QR scan"}
+                  saved={getSavedChannel(ch.type, "personal")}
+                  onDisconnect={() => {
+                    setSavedChannels((prev) =>
+                      prev.map((c) =>
+                        c.channelType === ch.type && c.connectionMode === "personal"
+                          ? { ...c, enabled: false, status: "disconnected" }
+                          : c
+                      )
+                    )
+                  }}
+                />
+              ) : (
+                <>
+                  {/* Business Mode (Token/Config) */}
+                  {isConfiguring && ch.configFields.length > 0 && (
+                    <div className="mt-4 space-y-3">
+                      {ch.configFields.map((field) => (
+                        <div key={field.key}>
+                          <label className="mb-1 block text-xs font-medium text-zinc-400">
+                            {field.label}
+                          </label>
+                          <Input
+                            type={field.type || "text"}
+                            placeholder={field.placeholder}
+                            value={formData[field.key] || ""}
+                            onChange={(e) =>
+                              setFormData({ ...formData, [field.key]: e.target.value })
+                            }
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex gap-2">
+                    {isConfiguring ? (
+                      <>
+                        <Button size="sm" onClick={() => save(ch.type, true)} disabled={saving}>
+                          {saving ? "Connecting..." : "Save & Connect"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => { setConfiguring(null); setFormData({}); setStatusMessage(null) }}
+                        >
+                          Cancel
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => { setConfiguring(ch.type); setFormData(saved?.config || {}); setStatusMessage(null) }}
+                      >
+                        {saved ? "Configure" : "Set Up"}
+                      </Button>
+                    )}
+                    {saved?.enabled && !isConfiguring && (
+                      <Button size="sm" variant="ghost" onClick={() => save(ch.type, false)}>
+                        Disconnect
+                      </Button>
+                    )}
+                  </div>
+                </>
+              )}
             </Card>
           )
         })}

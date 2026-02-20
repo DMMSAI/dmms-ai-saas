@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { pool, cuid } from "@/lib/db"
 
-export async function POST() {
+export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
@@ -12,10 +12,19 @@ export async function POST() {
   const userId = (session.user as { id: string }).id
   const now = new Date().toISOString()
 
+  // Default to personal mode for WhatsApp QR connect
+  let connectionMode = "personal"
+  try {
+    const body = await req.json()
+    if (body.connectionMode) connectionMode = body.connectionMode
+  } catch {
+    // No body is fine — default to personal
+  }
+
   // Upsert WhatsApp channel as enabled with Baileys mode (no accessToken = Baileys)
   const existing = await pool.query(
-    'SELECT id FROM "UserChannel" WHERE "userId" = $1 AND "channelType" = $2',
-    [userId, "whatsapp"]
+    'SELECT id FROM "UserChannel" WHERE "userId" = $1 AND "channelType" = $2 AND "connectionMode" = $3',
+    [userId, "whatsapp", connectionMode]
   )
 
   if (existing.rows.length > 0) {
@@ -26,8 +35,8 @@ export async function POST() {
   } else {
     const id = cuid()
     await pool.query(
-      'INSERT INTO "UserChannel" (id, "userId", "channelType", config, enabled, status, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-      [id, userId, "whatsapp", JSON.stringify({ mode: "baileys" }), true, "connecting", now, now]
+      'INSERT INTO "UserChannel" (id, "userId", "channelType", "connectionMode", config, enabled, status, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+      [id, userId, "whatsapp", connectionMode, JSON.stringify({ mode: "baileys" }), true, "connecting", now, now]
     )
   }
 
@@ -64,7 +73,7 @@ export async function DELETE() {
     [userId]
   )
 
-  // Disable the channel
+  // Disable both business and personal WhatsApp channels
   await pool.query(
     'UPDATE "UserChannel" SET enabled = false, status = $1, "updatedAt" = NOW() WHERE "userId" = $2 AND "channelType" = $3',
     ["disconnected", userId, "whatsapp"]

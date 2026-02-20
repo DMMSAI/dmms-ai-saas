@@ -7,12 +7,13 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build && cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public && cp bot.mjs .next/standalone/bot.mjs",
+    "build": "next build && cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public && cp bot.mjs .next/standalone/bot.mjs && mkdir -p .next/standalone/lib && cp -r lib/ai lib/middleware lib/connectors .next/standalone/lib/ && cp lib/baileys-auth-pg.mjs .next/standalone/lib/",
     "start": "node bot.mjs & node .next/standalone/server.js",
     "lint": "eslint",
     "db:init": "npx tsx lib/init-db.ts"
   },
   "dependencies": {
+    "@google/genai": "^1.42.0",
     "@hapi/boom": "^10.0.1",
     "@slack/bolt": "^4.6.0",
     "@types/bcryptjs": "^2.4.6",

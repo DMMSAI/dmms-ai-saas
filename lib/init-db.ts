@@ -21,12 +21,13 @@ CREATE TABLE IF NOT EXISTS "UserChannel" (
   id TEXT PRIMARY KEY,
   "userId" TEXT NOT NULL REFERENCES "User"(id) ON DELETE CASCADE,
   "channelType" TEXT NOT NULL,
+  "connectionMode" TEXT DEFAULT 'business',
   config TEXT DEFAULT '{}',
   enabled BOOLEAN DEFAULT false,
   status TEXT DEFAULT 'disconnected',
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE("userId", "channelType")
+  UNIQUE("userId", "channelType", "connectionMode")
 );
 
 CREATE TABLE IF NOT EXISTS "UserApiKey" (
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS "Conversation" (
   "channelPeer" TEXT DEFAULT '',
   title TEXT DEFAULT 'New Chat',
   "aiModel" TEXT DEFAULT 'gpt-4o',
+  "aiProvider" TEXT DEFAULT 'openai',
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -86,6 +88,20 @@ CREATE INDEX IF NOT EXISTS idx_userchannel_user ON "UserChannel"("userId");
 CREATE INDEX IF NOT EXISTS idx_userapikey_user ON "UserApiKey"("userId");
 `
 
+const MIGRATIONS = `
+-- Migration: Add connectionMode to UserChannel (safe for existing DBs)
+ALTER TABLE "UserChannel" ADD COLUMN IF NOT EXISTS "connectionMode" TEXT DEFAULT 'business';
+DO $$ BEGIN
+  ALTER TABLE "UserChannel" DROP CONSTRAINT IF EXISTS "UserChannel_userId_channelType_key";
+  ALTER TABLE "UserChannel" ADD CONSTRAINT "UserChannel_userId_channelType_connectionMode_key"
+    UNIQUE("userId", "channelType", "connectionMode");
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
+
+-- Migration: Add aiProvider to Conversation
+ALTER TABLE "Conversation" ADD COLUMN IF NOT EXISTS "aiProvider" TEXT DEFAULT 'openai';
+`
+
 async function initDb() {
   const dbUrl = process.env.DATABASE_URL
   if (!dbUrl) {
@@ -98,6 +114,10 @@ async function initDb() {
   console.log("Creating tables...")
   await pool.query(SCHEMA)
   console.log("Tables created.")
+
+  console.log("Running migrations...")
+  await pool.query(MIGRATIONS)
+  console.log("Migrations applied.")
 
   // Seed admin user if not exists
   const existing = await pool.query('SELECT id FROM "User" WHERE email = $1', ["admin@admin.com"])
