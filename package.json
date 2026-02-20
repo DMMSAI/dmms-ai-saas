@@ -40,10 +40,6 @@
     "tsx": "^4.21.0",
     "zod": "^4.3.6"
   },
-  "optionalDependencies": {
-    "wechaty": "^1.20.2",
-    "wechaty-puppet-wechat4u": "^1.14.14"
-  },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
