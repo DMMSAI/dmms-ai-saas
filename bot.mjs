@@ -51,6 +51,14 @@ async function ensureTables() {
     -- Migrations: safe column additions for existing DBs
     ALTER TABLE "UserChannel" ADD COLUMN IF NOT EXISTS "connectionMode" TEXT DEFAULT 'business';
     ALTER TABLE "Conversation" ADD COLUMN IF NOT EXISTS "aiProvider" TEXT DEFAULT 'openai';
+
+    -- Migration: update unique constraint to include connectionMode
+    DO $$ BEGIN
+      ALTER TABLE "UserChannel" DROP CONSTRAINT IF EXISTS "UserChannel_userId_channelType_key";
+      ALTER TABLE "UserChannel" ADD CONSTRAINT "UserChannel_userId_channelType_connectionMode_key"
+        UNIQUE("userId", "channelType", "connectionMode");
+    EXCEPTION WHEN duplicate_table THEN NULL;
+    END $$;
   `)
   console.log("[Gateway] Database tables ready.")
 }

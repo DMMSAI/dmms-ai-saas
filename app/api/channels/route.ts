@@ -45,12 +45,27 @@ export async function POST(req: Request) {
     )
     channel = res.rows[0]
   } else {
-    const id = cuid()
-    const res = await pool.query(
-      'INSERT INTO "UserChannel" (id, "userId", "channelType", "connectionMode", config, enabled, status, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *',
-      [id, session.user.id, channelType, mode, configStr, enabled ?? false, "disconnected", now, now]
+    // Also check for row with old constraint (no connectionMode)
+    const oldRow = await pool.query(
+      'SELECT id FROM "UserChannel" WHERE "userId" = $1 AND "channelType" = $2',
+      [session.user.id, channelType]
     )
-    channel = res.rows[0]
+
+    if (oldRow.rows.length > 0 && mode === "business") {
+      // Update existing row (migrating from old schema without connectionMode)
+      const res = await pool.query(
+        'UPDATE "UserChannel" SET config = $1, enabled = $2, "connectionMode" = $3, "updatedAt" = $4 WHERE id = $5 RETURNING *',
+        [configStr, enabled ?? false, mode, now, oldRow.rows[0].id]
+      )
+      channel = res.rows[0]
+    } else {
+      const id = cuid()
+      const res = await pool.query(
+        'INSERT INTO "UserChannel" (id, "userId", "channelType", "connectionMode", config, enabled, status, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *',
+        [id, session.user.id, channelType, mode, configStr, enabled ?? false, "disconnected", now, now]
+      )
+      channel = res.rows[0]
+    }
   }
 
   return NextResponse.json(channel)
