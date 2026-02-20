@@ -46,6 +46,19 @@ const CHANNELS: ChannelInfo[] = [
     connectionMethod: "token",
   },
   {
+    type: "wechat",
+    name: "WeChat",
+    description: "Connect via WeChat Official Account API or scan QR to link",
+    configFields: [
+      { key: "appId", label: "App ID", placeholder: "WeChat App ID" },
+      { key: "appSecret", label: "App Secret", placeholder: "WeChat App Secret", type: "password" },
+      { key: "token", label: "Token", placeholder: "Verification token" },
+    ],
+    connectionMethod: "token",
+    hasPersonalMode: true,
+    personalDescription: "Scan QR code with WeChat to link your account (Wechaty)",
+  },
+  {
     type: "discord",
     name: "Discord",
     description: "Connect a Discord bot to your server",
@@ -222,19 +235,6 @@ const CHANNELS: ChannelInfo[] = [
       { key: "botName", label: "Bot Name", placeholder: "DMMS AI" },
     ],
     connectionMethod: "token",
-  },
-  {
-    type: "wechat",
-    name: "WeChat",
-    description: "Connect via WeChat Official Account API or scan QR to link",
-    configFields: [
-      { key: "appId", label: "App ID", placeholder: "WeChat App ID" },
-      { key: "appSecret", label: "App Secret", placeholder: "WeChat App Secret", type: "password" },
-      { key: "token", label: "Token", placeholder: "Verification token" },
-    ],
-    connectionMethod: "token",
-    hasPersonalMode: true,
-    personalDescription: "Scan QR code with WeChat to link your account (Wechaty)",
   },
   {
     type: "rocketchat",
