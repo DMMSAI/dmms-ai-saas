@@ -331,7 +331,7 @@ function QrScanCard({
       } catch {
         // keep polling
       }
-    }, 2000)
+    }, 1500)
   }, [stopPolling, channelType])
 
   useEffect(() => {

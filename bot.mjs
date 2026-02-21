@@ -92,7 +92,7 @@ async function main() {
   await registry.syncFromDB()
 
   // Start polling for new channel activations
-  registry.pollForChanges(5000)
+  registry.pollForChanges(2000)
 
   console.log("[Gateway] All connectors initialized. Waiting for messages...")
 
