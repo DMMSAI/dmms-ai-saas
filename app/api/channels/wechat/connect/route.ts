@@ -40,13 +40,23 @@ export async function POST() {
     )
   }
 
-  // Clear old events to force fresh QR scan
+  // Check if a QR code already exists (connector may have started at boot)
+  const existingQr = await pool.query(
+    "SELECT payload FROM channel_events WHERE user_id = $1 AND channel_type = 'wechat' AND event_type = 'qr' ORDER BY created_at DESC LIMIT 1",
+    [userId]
+  )
+
+  if (existingQr.rows.length > 0 && existingQr.rows[0].payload) {
+    // QR already available — don't delete it, just return
+    return NextResponse.json({ ok: true, status: "connecting" })
+  }
+
+  // No QR yet — clear old events and write "connecting"
   await pool.query(
     "DELETE FROM channel_events WHERE user_id = $1 AND channel_type = 'wechat'",
     [userId]
   )
 
-  // Write a "connecting" event
   await pool.query(
     "INSERT INTO channel_events (id, user_id, channel_type, event_type, payload, created_at) VALUES ($1, $2, $3, $4, $5, NOW())",
     [cuid(), userId, "wechat", "connecting", null]
