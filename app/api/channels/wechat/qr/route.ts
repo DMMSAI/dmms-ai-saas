@@ -21,6 +21,24 @@ export async function GET() {
   )
 
   if (connectedRes.rows.length === 0) {
+    // No QR/connected/error event yet — check if "connecting" event is too old (timeout)
+    const connectingRes = await pool.query(
+      `SELECT created_at FROM channel_events
+       WHERE user_id = $1 AND channel_type = 'wechat' AND event_type = 'connecting'
+       ORDER BY created_at DESC LIMIT 1`,
+      [userId]
+    )
+
+    if (connectingRes.rows.length > 0) {
+      const age = Date.now() - new Date(connectingRes.rows[0].created_at).getTime()
+      if (age > 30000) {
+        return NextResponse.json({
+          status: "error",
+          error: "WeChat personal mode is not available yet. Coming soon!",
+        })
+      }
+    }
+
     return NextResponse.json({ status: "waiting" })
   }
 

@@ -285,6 +285,7 @@ function QrScanCard({
   const [status, setStatus] = useState<string>(saved?.status || "disconnected")
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const lastQr = useRef<string | null>(null)
 
@@ -325,6 +326,7 @@ function QrScanCard({
           stopPolling()
         } else if (data.status === "error") {
           setStatus("error")
+          setErrorMessage(data.error || null)
           setConnecting(false)
           stopPolling()
         }
@@ -406,7 +408,7 @@ function QrScanCard({
       )}
 
       {status === "error" && (
-        <p className="text-sm text-red-400">Connection error. Try again.</p>
+        <p className="text-sm text-red-400">{errorMessage || "Connection error. Try again."}</p>
       )}
 
       <div className="flex gap-2">
