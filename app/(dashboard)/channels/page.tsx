@@ -82,12 +82,14 @@ const CHANNELS: ChannelInfo[] = [
   {
     type: "signal",
     name: "Signal",
-    description: "Connect via signal-cli bridge",
+    description: "Connect via signal-cli bridge or scan QR to link",
     configFields: [
       { key: "signalNumber", label: "Phone Number", placeholder: "+1234567890" },
-      { key: "signalCliPath", label: "signal-cli API URL", placeholder: "http://localhost:8080" },
+      { key: "signalCliUrl", label: "signal-cli API URL", placeholder: "http://localhost:8080" },
     ],
     connectionMethod: "bridge",
+    hasPersonalMode: true,
+    personalDescription: "Scan QR code with Signal app to link as secondary device",
   },
   {
     type: "imessage",
@@ -312,12 +314,17 @@ function QrScanCard({
           setStatus("qr")
           if (data.qr !== lastQr.current) {
             lastQr.current = data.qr
-            try {
-              const QRCode = (await import("qrcode")).default
-              const url = await QRCode.toDataURL(data.qr, { width: 256, margin: 2 })
-              setQrDataUrl(url)
-            } catch {
-              setQrDataUrl(null)
+            // Signal returns a data:image/png URL directly; others return QR text
+            if (data.qr.startsWith("data:image/")) {
+              setQrDataUrl(data.qr)
+            } else {
+              try {
+                const QRCode = (await import("qrcode")).default
+                const url = await QRCode.toDataURL(data.qr, { width: 256, margin: 2 })
+                setQrDataUrl(url)
+              } catch {
+                setQrDataUrl(null)
+              }
             }
           }
         } else if (data.status === "logged_out") {
