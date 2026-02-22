@@ -15,12 +15,25 @@ export default function ChatPage() {
   const [input, setInput] = useState("")
   const [isStreaming, setIsStreaming] = useState(false)
   const [conversationId, setConversationId] = useState<string | null>(null)
+  const [selectedModel, setSelectedModel] = useState("openai:gpt-4o")
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
+
+  // Load user's default model from settings
+  useEffect(() => {
+    fetch("/api/settings/model")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.aiProvider && data?.aiModel) {
+          setSelectedModel(`${data.aiProvider}:${data.aiModel}`)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const sendMessage = async () => {
     const text = input.trim()
@@ -35,11 +48,15 @@ export default function ChatPage() {
     const assistantId = crypto.randomUUID()
     setMessages((prev) => [...prev, { id: assistantId, role: "assistant", content: "" }])
 
+    // Parse provider and model from selection
+    const [aiProvider, ...modelParts] = selectedModel.split(":")
+    const model = modelParts.join(":")
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, conversationId }),
+        body: JSON.stringify({ message: text, conversationId, aiProvider, model }),
       })
 
       if (!res.ok) {
@@ -126,9 +143,31 @@ export default function ChatPage() {
           <h1 className="text-xl font-bold text-zinc-100">Chat Playground</h1>
           <p className="text-sm text-zinc-400">Test your AI assistant</p>
         </div>
-        <Button variant="outline" size="sm" onClick={newChat}>
-          New Chat
-        </Button>
+        <div className="flex items-center gap-2">
+          <select
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300 focus:outline-none focus:ring-2 focus:ring-teal-500"
+          >
+            <optgroup label="OpenAI">
+              <option value="openai:gpt-5.2-chat-latest">GPT-5.2</option>
+              <option value="openai:gpt-4o">GPT-4o</option>
+              <option value="openai:gpt-4o-mini">GPT-4o Mini</option>
+            </optgroup>
+            <optgroup label="Gemini">
+              <option value="gemini:gemini-2.5-flash">Gemini 2.5 Flash</option>
+              <option value="gemini:gemini-2.5-pro">Gemini 2.5 Pro</option>
+            </optgroup>
+            <optgroup label="Claude">
+              <option value="anthropic:claude-sonnet-4-6">Claude Sonnet 4.6</option>
+              <option value="anthropic:claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+              <option value="anthropic:claude-opus-4-6">Claude Opus 4.6</option>
+            </optgroup>
+          </select>
+          <Button variant="outline" size="sm" onClick={newChat}>
+            New Chat
+          </Button>
+        </div>
       </div>
 
       {/* Messages */}

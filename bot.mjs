@@ -60,6 +60,8 @@ async function ensureTables() {
     -- Migrations: safe column additions for existing DBs
     ALTER TABLE "UserChannel" ADD COLUMN IF NOT EXISTS "connectionMode" TEXT DEFAULT 'business';
     ALTER TABLE "Conversation" ADD COLUMN IF NOT EXISTS "aiProvider" TEXT DEFAULT 'openai';
+    ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "defaultAiProvider" TEXT DEFAULT 'openai';
+    ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "defaultAiModel" TEXT DEFAULT 'gpt-4o';
 
     -- Migration: update unique constraint to include connectionMode
     DO $$ BEGIN

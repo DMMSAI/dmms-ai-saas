@@ -16,6 +16,9 @@ export default function SettingsPage() {
   const [savingOpenai, setSavingOpenai] = useState(false)
   const [savingGemini, setSavingGemini] = useState(false)
   const [savingAnthropic, setSavingAnthropic] = useState(false)
+  const [selectedModel, setSelectedModel] = useState("openai:gpt-4o")
+  const [savingModel, setSavingModel] = useState(false)
+  const [modelSaved, setModelSaved] = useState(false)
 
   useEffect(() => {
     fetch("/api/settings/apikeys")
@@ -25,6 +28,15 @@ export default function SettingsPage() {
         if (data?.openai) setOpenaiKey("sk-••••••••••••••••")
         if (data?.gemini) setGeminiKey("AI••••••••••••••••")
         if (data?.anthropic) setAnthropicKey("sk-ant-••••••••••••••••")
+      })
+      .catch(() => {})
+
+    fetch("/api/settings/model")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.aiProvider && data?.aiModel) {
+          setSelectedModel(`${data.aiProvider}:${data.aiModel}`)
+        }
       })
       .catch(() => {})
   }, [])
@@ -44,6 +56,24 @@ export default function SettingsPage() {
       if (provider === "anthropic") setAnthropicKey("sk-ant-••••••••••••••••")
     } finally {
       setSaving(false)
+    }
+  }
+
+  const saveModel = async (value: string) => {
+    setSelectedModel(value)
+    setModelSaved(false)
+    const [aiProvider, aiModel] = value.split(":")
+    setSavingModel(true)
+    try {
+      await fetch("/api/settings/model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ aiProvider, aiModel }),
+      })
+      setModelSaved(true)
+      setTimeout(() => setModelSaved(false), 2000)
+    } finally {
+      setSavingModel(false)
     }
   }
 
@@ -186,10 +216,18 @@ export default function SettingsPage() {
 
       {/* AI Model */}
       <Card>
-        <CardTitle>AI Model</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          AI Model
+          {modelSaved && <Badge variant="success" className="text-[10px]">Saved</Badge>}
+          {savingModel && <span className="text-xs text-zinc-500">Saving...</span>}
+        </CardTitle>
         <CardDescription>Select your default AI provider and model</CardDescription>
         <div className="mt-4 space-y-3">
-          <select className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-teal-500">
+          <select
+            value={selectedModel}
+            onChange={(e) => saveModel(e.target.value)}
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-teal-500"
+          >
             <optgroup label="OpenAI">
               <option value="openai:gpt-5.2-chat-latest">GPT-5.2 (Latest)</option>
               <option value="openai:gpt-4o">GPT-4o (Recommended)</option>
@@ -206,7 +244,7 @@ export default function SettingsPage() {
             </optgroup>
           </select>
           <p className="text-xs text-zinc-500">
-            This applies to web chat. Messenger channels use the model configured at the time of conversation creation.
+            This applies to web chat and new messenger conversations. Changes take effect immediately.
           </p>
         </div>
       </Card>

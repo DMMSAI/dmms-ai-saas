@@ -100,6 +100,10 @@ END $$;
 
 -- Migration: Add aiProvider to Conversation
 ALTER TABLE "Conversation" ADD COLUMN IF NOT EXISTS "aiProvider" TEXT DEFAULT 'openai';
+
+-- Migration: Add default AI model preference to User
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "defaultAiProvider" TEXT DEFAULT 'openai';
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "defaultAiModel" TEXT DEFAULT 'gpt-4o';
 `
 
 async function initDb() {
