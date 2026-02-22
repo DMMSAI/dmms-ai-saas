@@ -15,7 +15,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   if (status === "loading") {
     return (
-      <div className="flex h-screen items-center justify-center bg-zinc-950">
+      <div className="flex h-screen items-center justify-center bg-surface-primary">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-teal-500 border-t-transparent" />
       </div>
     )
@@ -26,7 +26,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header />
-        <main className="flex-1 overflow-auto p-6">{children}</main>
+        <main className="flex-1 overflow-auto p-6 lg:p-8">{children}</main>
       </div>
     </div>
   )

@@ -1,19 +1,13 @@
 import { NextRequest, NextResponse } from "next/server"
 import { pool, cuid } from "@/lib/db"
-import OpenAI from "openai"
 
 /**
  * WhatsApp Business Cloud API — Webhook Handler
  *
- * Middleware Pipeline (same as Telegram):
+ * Middleware Pipeline:
  *   Meta Webhook → Receive → Session → AI (+ Tools) → Store → Send → WhatsApp
  *
- * Setup required in Meta Developer Portal:
- *   1. Create a Meta App with WhatsApp product
- *   2. Set webhook URL to: https://your-domain.com/api/webhooks/whatsapp
- *   3. Set verify token to match WHATSAPP_VERIFY_TOKEN
- *   4. Subscribe to "messages" webhook field
- *   5. Get a permanent access token and phone number ID
+ * Now supports multi-provider AI routing (OpenAI, Gemini, Anthropic).
  */
 
 const WA_API = "https://graph.facebook.com/v21.0"
@@ -26,7 +20,6 @@ export async function GET(req: NextRequest) {
   const token = params.get("hub.verify_token")
   const challenge = params.get("hub.challenge")
 
-  // Load verify token from DB or env
   const verifyToken = await getVerifyToken()
 
   if (mode === "subscribe" && token === verifyToken) {
@@ -43,8 +36,6 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const body = await req.json()
 
-  // Return 200 immediately (Meta requires fast response)
-  // Process message asynchronously
   processWebhook(body).catch((err) => {
     console.error("[WA] Processing error:", err.message)
   })
@@ -55,18 +46,16 @@ export async function POST(req: NextRequest) {
 // ── Message Processing Pipeline ──────────────────────────────────────
 
 async function processWebhook(body: WebhookBody) {
-  // Extract messages from the webhook payload
   const entry = body.entry?.[0]
   const changes = entry?.changes?.[0]
   const value = changes?.value
 
-  if (!value?.messages?.length) return // Not a message event (could be status update)
+  if (!value?.messages?.length) return
 
   const message = value.messages[0]
   const contact = value.contacts?.[0]
   const metadata = value.metadata
 
-  // Only handle text messages for now
   if (message.type !== "text") {
     console.log(`[WA] Skipping non-text message type: ${message.type}`)
     return
@@ -74,7 +63,7 @@ async function processWebhook(body: WebhookBody) {
 
   const ctx: WaContext = {
     phoneNumberId: metadata.phone_number_id,
-    from: message.from, // sender's phone number
+    from: message.from,
     text: message.text.body.trim(),
     messageId: message.id,
     userName: contact?.profile?.name || "User",
@@ -95,7 +84,7 @@ async function processWebhook(body: WebhookBody) {
 
     const elapsed = Date.now() - ctx.startTime
     console.log(
-      `[WA] ${ctx.userName}: "${ctx.text.slice(0, 40)}" → "${(ctx.reply || "").slice(0, 40)}" (${elapsed}ms)`
+      `[WA] ${ctx.userName}: "${ctx.text.slice(0, 40)}" → "${(ctx.reply || "").slice(0, 40)}" (${elapsed}ms, provider: ${ctx.aiProvider})`
     )
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Unknown error"
@@ -122,17 +111,35 @@ async function sessionMiddleware(ctx: WaContext) {
   ctx.accessToken = config.accessToken
   if (!ctx.accessToken) throw new Error("No WhatsApp access token configured")
 
-  // Get OpenAI API key
+  // ── Look up the user's active AI provider and model from settings ──
+  const settingsRes = await pool.query(
+    'SELECT "defaultAiProvider", "defaultAiModel" FROM "User" WHERE id = $1',
+    [ctx.userId]
+  )
+  const userSettings = settingsRes.rows[0]
+  const activeProvider = userSettings?.defaultAiProvider || "openai"
+  const activeModel = userSettings?.defaultAiModel || "gpt-4o"
+
+  // Get API key for the user's ACTIVE provider (not hardcoded to openai)
   const keyRes = await pool.query(
     'SELECT "apiKey" FROM "UserApiKey" WHERE "userId" = $1 AND provider = $2',
-    [ctx.userId, "openai"]
+    [ctx.userId, activeProvider]
   )
-  ctx.apiKey = keyRes.rows[0]?.apiKey || process.env.OPENAI_API_KEY
-  if (!ctx.apiKey) throw new Error("No OpenAI API key configured")
+
+  const envKeyMap: Record<string, string> = {
+    openai: "OPENAI_API_KEY",
+    gemini: "GEMINI_API_KEY",
+    anthropic: "ANTHROPIC_API_KEY",
+  }
+  ctx.apiKey = keyRes.rows[0]?.apiKey || process.env[envKeyMap[activeProvider] || "OPENAI_API_KEY"]
+  if (!ctx.apiKey) throw new Error(`No ${activeProvider} API key configured`)
+
+  ctx.aiProvider = activeProvider
+  ctx.aiModel = activeModel
 
   // Get or create conversation
   const convoRes = await pool.query(
-    'SELECT id, "aiModel" FROM "Conversation" WHERE "userId" = $1 AND "channelType" = $2 AND "channelPeer" = $3 ORDER BY "updatedAt" DESC LIMIT 1',
+    'SELECT id, "aiModel", "aiProvider" FROM "Conversation" WHERE "userId" = $1 AND "channelType" = $2 AND "channelPeer" = $3 ORDER BY "updatedAt" DESC LIMIT 1',
     [ctx.userId, "whatsapp", ctx.from]
   )
 
@@ -140,13 +147,14 @@ async function sessionMiddleware(ctx: WaContext) {
 
   if (convoRes.rows.length > 0) {
     ctx.convoId = convoRes.rows[0].id
-    ctx.aiModel = convoRes.rows[0].aiModel || "gpt-4o-mini"
+    // Use conversation's provider/model if set, otherwise use user's active settings
+    ctx.aiModel = convoRes.rows[0].aiModel || activeModel
+    ctx.aiProvider = convoRes.rows[0].aiProvider || activeProvider
   } else {
     ctx.convoId = cuid()
-    ctx.aiModel = "gpt-4o-mini"
     await pool.query(
-      'INSERT INTO "Conversation" (id, "userId", "channelType", "channelPeer", title, "aiModel", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-      [ctx.convoId, ctx.userId, "whatsapp", ctx.from, ctx.text.slice(0, 50), ctx.aiModel, ctx.now, ctx.now]
+      'INSERT INTO "Conversation" (id, "userId", "channelType", "channelPeer", title, "aiModel", "aiProvider", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+      [ctx.convoId, ctx.userId, "whatsapp", ctx.from, ctx.text.slice(0, 50), ctx.aiModel, ctx.aiProvider, ctx.now, ctx.now]
     )
   }
 
@@ -157,36 +165,10 @@ async function sessionMiddleware(ctx: WaContext) {
   )
   ctx.history = historyRes.rows.reverse()
 
-  console.log(`[WA:Session] Conversation ${(ctx.convoId || "").slice(0, 8)}... | ${(ctx.history || []).length} prior messages`)
+  console.log(`[WA:Session] Conversation ${(ctx.convoId || "").slice(0, 8)}... | Provider: ${ctx.aiProvider} | Model: ${ctx.aiModel} | ${(ctx.history || []).length} prior messages`)
 }
 
-// ── AI Middleware (with Tools) ───────────────────────────────────────
-
-const TOOLS: OpenAI.ChatCompletionTool[] = [
-  {
-    type: "function",
-    function: {
-      name: "web_search",
-      description:
-        "Search the internet for current/real-time information including weather, news, prices, sports scores, events, people, places, or any factual question.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "The search query" },
-        },
-        required: ["query"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_datetime",
-      description: "Get the current date, time, and day of the week.",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-]
+// ── AI Middleware (Multi-Provider + Tools) ────────────────────────────
 
 function buildSystemPrompt(): string {
   const now = new Date()
@@ -220,126 +202,55 @@ IDENTITY:
 }
 
 async function aiMiddleware(ctx: WaContext) {
-  const openai = new OpenAI({ apiKey: ctx.apiKey })
+  const provider = ctx.aiProvider || "openai"
+  const systemPrompt = buildSystemPrompt()
 
-  const messages: OpenAI.ChatCompletionMessageParam[] = [
-    { role: "system", content: buildSystemPrompt() },
+  const messages = [
+    { role: "system" as const, content: systemPrompt },
     ...(ctx.history || []).map((m: { role: string; content: string }) => ({
       role: m.role as "user" | "assistant",
       content: m.content,
     })),
-    { role: "user", content: ctx.text },
+    { role: "user" as const, content: ctx.text },
   ]
 
-  let maxRounds = 3
-  let round = 0
-
-  while (round < maxRounds) {
-    round++
-    console.log(`[WA:AI] Round ${round} — sending to ${ctx.aiModel}...`)
-
-    const completion = await openai.chat.completions.create({
-      model: ctx.aiModel!,
-      messages,
-      temperature: 0.7,
-      max_tokens: 1024,
-      tools: TOOLS,
-      tool_choice: "auto",
-    })
-
-    const choice = completion.choices[0]
-
-    if (choice.finish_reason === "tool_calls" || choice.message.tool_calls?.length) {
-      messages.push(choice.message)
-
-      for (const toolCall of choice.message.tool_calls || []) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const tc = toolCall as any
-        const fnName = tc.function?.name || tc.name || ""
-        const fnArgs = tc.function?.arguments || "{}"
-        const tcId = tc.id || ""
-        const args = JSON.parse(fnArgs)
-        console.log(`[WA:AI] Tool: ${fnName}(${JSON.stringify(args).slice(0, 80)})`)
-
-        let result: string
-        if (fnName === "web_search") {
-          result = await webSearch(args.query)
-          ctx.toolsUsed.push("web_search")
-        } else if (fnName === "get_datetime") {
-          const now = new Date()
-          result = JSON.stringify({
-            date: now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" }),
-            time: now.toLocaleTimeString("en-US", { hour12: true }),
-            timezone: "UTC",
-          })
-          ctx.toolsUsed.push("get_datetime")
-        } else {
-          result = "Tool not found."
-        }
-
-        messages.push({ role: "tool", tool_call_id: tcId, content: result })
-      }
-      continue
-    }
-
-    ctx.reply = choice.message.content || "Sorry, I couldn't generate a response."
-    break
-  }
-
-  if (!ctx.reply) ctx.reply = "Sorry, I took too long thinking. Please try again."
-
-  const elapsed = Date.now() - ctx.startTime
-  console.log(`[WA:AI] Response ready (${elapsed}ms, ${round} rounds${ctx.toolsUsed.length ? ", tools: " + ctx.toolsUsed.join(", ") : ""})`)
-}
-
-// ── Web Search (DuckDuckGo) ──────────────────────────────────────────
-
-async function webSearch(query: string): Promise<string> {
-  console.log(`[WA:Search] Searching: "${query}"`)
+  const apiKey = ctx.apiKey!
+  const model = ctx.aiModel || "gpt-4o"
+  console.log(`[WA:AI] Using provider: ${provider}, model: ${model}`)
 
   try {
-    const res = await fetch("https://lite.duckduckgo.com/lite/", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "DMMS-AI/2.0",
-      },
-      body: `q=${encodeURIComponent(query)}`,
-      signal: AbortSignal.timeout(8000),
-    })
-
-    const html = await res.text()
-    const results: { title: string; snippet: string }[] = []
-
-    const snippetRegex = /<td\s+class=['"]result-snippet['"]>([\s\S]*?)<\/td>/gi
-    const linkRegex = /<a\s+[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/gi
-
-    const snippets: string[] = []
-    const titles: string[] = []
-    let m: RegExpExecArray | null
-
-    while ((m = snippetRegex.exec(html)) !== null && snippets.length < 5) {
-      snippets.push(m[1].replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim())
+    if (provider === "anthropic") {
+      const { callAnthropic } = await import("@/lib/ai/anthropic.mjs")
+      const result = await callAnthropic(apiKey, messages, model)
+      ctx.reply = result.reply
+      ctx.toolsUsed.push(...result.toolsUsed)
+    } else if (provider === "gemini") {
+      const { callGemini } = await import("@/lib/ai/gemini.mjs")
+      const result = await callGemini(apiKey, messages, model)
+      ctx.reply = result.reply
+      ctx.toolsUsed.push(...result.toolsUsed)
+    } else {
+      // OpenAI (default)
+      const { callOpenAI } = await import("@/lib/ai/openai.mjs")
+      const result = await callOpenAI(apiKey, messages, model)
+      ctx.reply = result.reply
+      ctx.toolsUsed.push(...result.toolsUsed)
     }
-
-    while ((m = linkRegex.exec(html)) !== null && titles.length < 5) {
-      titles.push(m[1].replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim())
-    }
-
-    for (let i = 0; i < Math.max(snippets.length, titles.length); i++) {
-      results.push({ title: titles[i] || "", snippet: snippets[i] || "" })
-    }
-
-    if (results.length === 0) {
-      return `No search results found for: "${query}". Please answer based on your knowledge.`
-    }
-
-    return `Web search results for "${query}":\n\n${results.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}`).join("\n\n")}\n\nUse these results to give an accurate answer.`
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Unknown error"
-    return `Web search failed (${msg}). Answer based on your knowledge.`
+    const msg = err instanceof Error ? err.message : "AI error"
+    console.error(`[WA:AI] ${provider} error:`, msg)
+    throw new Error(`AI provider (${provider}) error: ${msg}`)
   }
+
+  if (!ctx.reply) ctx.reply = "Sorry, I couldn't generate a response."
+
+  const elapsed = Date.now() - ctx.startTime
+  console.log(`[WA:AI] Response ready (${elapsed}ms, ${provider}${ctx.toolsUsed.length ? ", tools: " + ctx.toolsUsed.join(", ") : ""})`)
 }
+
+// ── Web Search (DuckDuckGo) — kept for OpenAI tool calls in webhook ──
+
+// Note: Gemini/Anthropic tool calls are handled by their own providers in lib/ai/
 
 // ── Store Middleware ──────────────────────────────────────────────────
 
@@ -366,7 +277,6 @@ async function sendMiddleware(ctx: WaContext) {
 }
 
 async function waSend(phoneNumberId: string, accessToken: string, to: string, text: string) {
-  // WhatsApp has a 4096 char limit per message
   const chunks: string[] = []
   for (let i = 0; i < text.length; i += 4000) {
     chunks.push(text.slice(i, i + 4000))
@@ -434,6 +344,7 @@ interface WaContext {
   accessToken?: string
   convoId?: string
   aiModel?: string
+  aiProvider?: string
   now?: string
   history?: { role: string; content: string }[]
   reply?: string

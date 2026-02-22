@@ -8,20 +8,20 @@ const channels = [
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-zinc-950">
+    <div className="min-h-screen bg-surface-primary">
       {/* Nav */}
-      <nav className="flex items-center justify-between border-b border-zinc-800/50 px-6 py-4 lg:px-12">
+      <nav className="flex items-center justify-between border-b border-border-glass px-6 py-4 lg:px-12">
         <div className="flex items-center gap-3">
           <img src="/logo.png" alt="DMMS AI" className="h-9 w-9 rounded-lg object-contain" />
-          <span className="text-lg font-bold text-zinc-100">DMMS AI</span>
+          <span className="text-lg font-bold text-text-primary">DMMS AI</span>
         </div>
         <div className="flex items-center gap-4">
-          <Link href="/login" className="text-sm text-zinc-400 hover:text-zinc-200">
+          <Link href="/login" className="text-sm text-text-secondary hover:text-text-primary transition-colors">
             Sign in
           </Link>
           <Link
             href="/signup"
-            className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700"
+            className="rounded-lg bg-gradient-to-r from-teal-500 to-teal-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-teal-500/20 hover:shadow-teal-500/30 hover:brightness-110 transition-all"
           >
             Get Started
           </Link>
@@ -39,26 +39,26 @@ export default function LandingPage() {
           <div className="mb-6 inline-flex items-center rounded-full border border-teal-500/20 bg-teal-500/10 px-4 py-1.5 text-sm text-teal-400">
             Every Messenger is AI Now.
           </div>
-          <h1 className="text-5xl font-bold leading-tight tracking-tight text-zinc-100 sm:text-6xl lg:text-7xl">
+          <h1 className="text-5xl font-bold leading-tight tracking-tight text-text-primary sm:text-6xl lg:text-7xl">
             One AI.{" "}
             <span className="bg-gradient-to-r from-teal-400 to-emerald-400 bg-clip-text text-transparent">
               Every Messenger.
             </span>
           </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-lg text-zinc-400 sm:text-xl">
+          <p className="mx-auto mt-6 max-w-2xl text-lg text-text-secondary sm:text-xl">
             Connect WhatsApp, Telegram, Discord, Slack, and 12+ more platforms to a
             single, powerful AI assistant. Manage all your conversations from one dashboard.
           </p>
           <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
             <Link
               href="/signup"
-              className="rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 px-8 py-3.5 text-base font-semibold text-white shadow-lg shadow-teal-500/25 hover:from-teal-600 hover:to-emerald-700"
+              className="rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 px-8 py-3.5 text-base font-semibold text-white shadow-lg shadow-teal-500/25 hover:from-teal-600 hover:to-emerald-700 transition-all"
             >
               Start for Free
             </Link>
             <Link
               href="/login"
-              className="rounded-xl border border-zinc-700 px-8 py-3.5 text-base font-medium text-zinc-300 hover:bg-zinc-800/50"
+              className="rounded-xl border border-border-glass-strong px-8 py-3.5 text-base font-medium text-text-secondary hover:bg-surface-card hover:text-text-primary transition-all"
             >
               Sign in
             </Link>
@@ -67,15 +67,15 @@ export default function LandingPage() {
       </section>
 
       {/* Channels Marquee */}
-      <section className="border-y border-zinc-800/50 py-12">
-        <p className="mb-8 text-center text-sm font-medium uppercase tracking-wider text-zinc-500">
+      <section className="border-y border-border-glass py-12">
+        <p className="mb-8 text-center text-sm font-medium uppercase tracking-wider text-text-muted">
           Supported Platforms
         </p>
         <div className="flex flex-wrap items-center justify-center gap-3 px-6">
           {channels.map((ch) => (
             <span
               key={ch}
-              className="rounded-full border border-zinc-800 bg-zinc-900/50 px-4 py-2 text-sm text-zinc-300"
+              className="rounded-full border border-border-glass bg-surface-card px-4 py-2 text-sm text-text-secondary"
             >
               {ch}
             </span>
@@ -86,10 +86,10 @@ export default function LandingPage() {
       {/* Features */}
       <section className="px-6 py-24 lg:px-12">
         <div className="mx-auto max-w-5xl">
-          <h2 className="mb-4 text-center text-3xl font-bold text-zinc-100 sm:text-4xl">
+          <h2 className="mb-4 text-center text-3xl font-bold text-text-primary sm:text-4xl">
             Everything you need
           </h2>
-          <p className="mx-auto mb-16 max-w-2xl text-center text-zinc-400">
+          <p className="mx-auto mb-16 max-w-2xl text-center text-text-secondary">
             A complete platform for managing AI-powered conversations across all your messaging channels.
           </p>
 
@@ -128,15 +128,15 @@ export default function LandingPage() {
             ].map((feature) => (
               <div
                 key={feature.title}
-                className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-6"
+                className="rounded-2xl border border-border-glass bg-surface-card/80 backdrop-blur-sm p-6 transition-colors hover:bg-surface-secondary"
               >
-                <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-lg bg-teal-500/10">
+                <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-teal-500/10">
                   <svg className="h-5 w-5 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d={feature.icon} />
                   </svg>
                 </div>
-                <h3 className="mb-2 text-lg font-semibold text-zinc-100">{feature.title}</h3>
-                <p className="text-sm text-zinc-400">{feature.desc}</p>
+                <h3 className="mb-2 text-lg font-semibold text-text-primary">{feature.title}</h3>
+                <p className="text-sm text-text-secondary">{feature.desc}</p>
               </div>
             ))}
           </div>
@@ -146,13 +146,13 @@ export default function LandingPage() {
       {/* CTA */}
       <section className="px-6 py-24 lg:px-12">
         <div className="mx-auto max-w-3xl rounded-2xl border border-teal-500/20 bg-gradient-to-br from-teal-500/10 to-emerald-500/5 p-12 text-center">
-          <h2 className="text-3xl font-bold text-zinc-100">Ready to get started?</h2>
-          <p className="mt-3 text-zinc-400">
+          <h2 className="text-3xl font-bold text-text-primary">Ready to get started?</h2>
+          <p className="mt-3 text-text-secondary">
             Create a free account and connect your first messenger in minutes.
           </p>
           <Link
             href="/signup"
-            className="mt-8 inline-block rounded-xl bg-teal-600 px-8 py-3.5 text-base font-semibold text-white hover:bg-teal-700"
+            className="mt-8 inline-block rounded-xl bg-gradient-to-r from-teal-500 to-teal-600 px-8 py-3.5 text-base font-semibold text-white shadow-lg shadow-teal-500/20 hover:shadow-teal-500/30 hover:brightness-110 transition-all"
           >
             Create Free Account
           </Link>
@@ -160,10 +160,10 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-zinc-800/50 px-6 py-8 lg:px-12">
+      <footer className="border-t border-border-glass px-6 py-8 lg:px-12">
         <div className="mx-auto flex max-w-5xl items-center justify-between">
-          <span className="text-sm text-zinc-500">DMMS AI &copy; {new Date().getFullYear()}</span>
-          <span className="text-sm text-zinc-600">Every Messenger is AI Now.</span>
+          <span className="text-sm text-text-muted">DMMS AI &copy; {new Date().getFullYear()}</span>
+          <span className="text-sm text-text-muted/60">Every Messenger is AI Now.</span>
         </div>
       </footer>
     </div>

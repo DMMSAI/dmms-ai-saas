@@ -382,14 +382,14 @@ function QrScanCard({
 
   return (
     <div className="space-y-3">
-      <p className="text-sm text-zinc-400">{description}</p>
+      <p className="text-sm text-text-secondary">{description}</p>
 
       {status === "qr" && qrDataUrl && (
         <div className="flex flex-col items-center">
-          <div className="rounded-lg border border-zinc-700 bg-white p-2">
+          <div className="rounded-xl border border-border-glass bg-white p-2">
             <img src={qrDataUrl} alt={`${channelName} QR Code`} width={256} height={256} />
           </div>
-          <p className="mt-2 text-xs text-zinc-400">
+          <p className="mt-2 text-xs text-text-secondary">
             Scan this QR code with your {channelName} app to link
           </p>
         </div>
@@ -398,7 +398,7 @@ function QrScanCard({
       {status === "connecting" && !qrDataUrl && (
         <div className="flex flex-col items-center gap-2">
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-teal-500 border-t-transparent" />
-          <p className="text-sm text-zinc-400">Waiting for QR code...</p>
+          <p className="text-sm text-text-secondary">Waiting for QR code...</p>
         </div>
       )}
 
@@ -444,13 +444,13 @@ function ModeTab({
   hasPersonalMode: boolean
 }) {
   return (
-    <div className="mb-3 flex gap-1 rounded-lg bg-zinc-800/50 p-1">
+    <div className="mb-3 flex gap-1 rounded-xl bg-surface-card border border-border-glass p-1">
       <button
         onClick={() => onModeChange("business")}
-        className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+        className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
           activeMode === "business"
-            ? "bg-zinc-700 text-zinc-100"
-            : "text-zinc-400 hover:text-zinc-300"
+            ? "bg-border-glass-strong text-text-primary shadow-sm"
+            : "text-text-secondary hover:text-text-primary"
         }`}
       >
         Business
@@ -458,12 +458,12 @@ function ModeTab({
       <button
         onClick={() => onModeChange("personal")}
         disabled={!hasPersonalMode}
-        className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+        className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
           activeMode === "personal"
-            ? "bg-zinc-700 text-zinc-100"
+            ? "bg-border-glass-strong text-text-primary shadow-sm"
             : hasPersonalMode
-              ? "text-zinc-400 hover:text-zinc-300"
-              : "cursor-not-allowed text-zinc-600"
+              ? "text-text-secondary hover:text-text-primary"
+              : "cursor-not-allowed text-text-muted"
         }`}
       >
         Personal
@@ -566,18 +566,18 @@ export default function ChannelsPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-zinc-100">Channels</h1>
-        <p className="text-sm text-zinc-400">
+        <h1 className="text-2xl font-bold text-text-primary">Channels</h1>
+        <p className="text-sm text-text-secondary">
           Connect 24 messaging platforms to your AI assistant — Business or Personal mode
         </p>
       </div>
 
       {statusMessage && (
         <div
-          className={`rounded-lg p-3 text-sm ${
+          className={`rounded-xl p-3 text-sm ${
             statusMessage.type === "success"
-              ? "bg-teal-500/10 text-teal-400"
-              : "bg-red-500/10 text-red-400"
+              ? "bg-teal-500/10 text-teal-400 ring-1 ring-teal-500/20"
+              : "bg-red-500/10 text-red-400 ring-1 ring-red-500/20"
           }`}
         >
           {statusMessage.text}
@@ -656,7 +656,7 @@ export default function ChannelsPage() {
                     <div className="mt-4 space-y-3">
                       {ch.configFields.map((field) => (
                         <div key={field.key}>
-                          <label className="mb-1 block text-xs font-medium text-zinc-400">
+                          <label className="mb-1 block text-xs font-medium text-text-secondary">
                             {field.label}
                           </label>
                           <Input

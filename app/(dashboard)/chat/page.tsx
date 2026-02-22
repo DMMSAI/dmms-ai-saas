@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { Send, MessageCircle, Plus } from "lucide-react"
 
 interface Message {
   id: string
@@ -140,14 +141,14 @@ export default function ChatPage() {
       {/* Header */}
       <div className="flex items-center justify-between pb-4">
         <div>
-          <h1 className="text-xl font-bold text-zinc-100">Chat Playground</h1>
-          <p className="text-sm text-zinc-400">Test your AI assistant</p>
+          <h1 className="text-xl font-bold text-text-primary">Chat Playground</h1>
+          <p className="text-sm text-text-secondary">Test your AI assistant</p>
         </div>
         <div className="flex items-center gap-2">
           <select
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
-            className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300 focus:outline-none focus:ring-2 focus:ring-teal-500"
+            className="rounded-xl border border-border-glass bg-surface-card px-2 py-1.5 text-xs text-text-secondary focus:outline-none focus:ring-2 focus:ring-teal-500"
           >
             <optgroup label="OpenAI">
               <option value="openai:gpt-5.2-chat-latest">GPT-5.2</option>
@@ -165,19 +166,18 @@ export default function ChatPage() {
             </optgroup>
           </select>
           <Button variant="outline" size="sm" onClick={newChat}>
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
             New Chat
           </Button>
         </div>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-auto rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
+      <div className="flex-1 overflow-auto rounded-2xl border border-border-glass bg-surface-card/50 p-4">
         {messages.length === 0 && (
-          <div className="flex h-full flex-col items-center justify-center text-zinc-500">
-            <svg className="mb-4 h-12 w-12 text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-            </svg>
-            <p className="text-lg font-medium">Start a conversation</p>
+          <div className="flex h-full flex-col items-center justify-center text-text-muted">
+            <MessageCircle className="mb-4 h-12 w-12 text-text-muted/50" strokeWidth={1} />
+            <p className="text-lg font-medium text-text-secondary">Start a conversation</p>
             <p className="text-sm">Type a message below to begin chatting with DMMS AI</p>
           </div>
         )}
@@ -195,16 +195,16 @@ export default function ChatPage() {
                 className={cn(
                   "max-w-[80%] rounded-2xl px-4 py-3 text-sm",
                   msg.role === "user"
-                    ? "bg-teal-600 text-white"
-                    : "bg-zinc-800 text-zinc-200"
+                    ? "bg-gradient-to-r from-teal-500 to-teal-600 text-white shadow-lg shadow-teal-500/25"
+                    : "bg-surface-card text-text-primary border border-border-glass"
                 )}
               >
                 <div className="whitespace-pre-wrap">{msg.content}</div>
                 {msg.role === "assistant" && !msg.content && isStreaming && (
                   <div className="flex gap-1">
-                    <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-500" style={{ animationDelay: "0ms" }} />
-                    <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-500" style={{ animationDelay: "150ms" }} />
-                    <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-500" style={{ animationDelay: "300ms" }} />
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-text-muted" style={{ animationDelay: "0ms" }} />
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-text-muted" style={{ animationDelay: "150ms" }} />
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-text-muted" style={{ animationDelay: "300ms" }} />
                   </div>
                 )}
               </div>
@@ -223,12 +223,10 @@ export default function ChatPage() {
           onKeyDown={handleKeyDown}
           placeholder="Type a message... (Enter to send, Shift+Enter for new line)"
           rows={1}
-          className="flex-1 resize-none rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-teal-500"
+          className="flex-1 resize-none rounded-xl border border-border-glass bg-surface-card px-4 py-3 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all"
         />
         <Button onClick={sendMessage} disabled={isStreaming || !input.trim()}>
-          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-          </svg>
+          <Send className="h-5 w-5" />
         </Button>
       </div>
     </div>

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Trash2 } from "lucide-react"
 
 interface Conversation {
   id: string
@@ -41,8 +42,8 @@ export default function ConversationsPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-zinc-100">Conversations</h1>
-        <p className="text-sm text-zinc-400">Monitor all conversations across channels</p>
+        <h1 className="text-2xl font-bold text-text-primary">Conversations</h1>
+        <p className="text-sm text-text-secondary">Monitor all conversations across channels</p>
       </div>
 
       {loading ? (
@@ -51,7 +52,7 @@ export default function ConversationsPage() {
         </div>
       ) : conversations.length === 0 ? (
         <Card className="py-12 text-center">
-          <p className="text-zinc-500">No conversations yet. Start chatting!</p>
+          <p className="text-text-muted">No conversations yet. Start chatting!</p>
         </Card>
       ) : (
         <div className="space-y-3">
@@ -59,19 +60,17 @@ export default function ConversationsPage() {
             <Card key={convo.id} className="flex items-center justify-between p-4">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="truncate font-medium text-zinc-200">{convo.title}</span>
+                  <span className="truncate font-medium text-text-primary">{convo.title}</span>
                   <Badge variant="outline">{convo.channelType}</Badge>
                   <Badge variant="default">{convo.aiModel}</Badge>
                 </div>
-                <div className="mt-1 text-xs text-zinc-500">
+                <div className="mt-1 text-xs text-text-muted">
                   {convo._count.messages} messages &middot; Last active{" "}
                   {new Date(convo.updatedAt).toLocaleDateString()}
                 </div>
               </div>
               <Button variant="ghost" size="sm" onClick={() => deleteConvo(convo.id)}>
-                <svg className="h-4 w-4 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
+                <Trash2 className="h-4 w-4 text-text-muted" />
               </Button>
             </Card>
           ))}

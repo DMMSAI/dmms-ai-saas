@@ -54,25 +54,25 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-950 p-4">
+    <div className="flex min-h-screen items-center justify-center bg-surface-primary p-4">
       <div className="w-full max-w-md space-y-8">
         {/* Logo */}
         <div className="text-center">
           <img src="/logo.png" alt="DMMS AI" className="mx-auto h-12 w-12 rounded-xl object-contain" />
-          <h1 className="mt-4 text-2xl font-bold text-zinc-100">Create your account</h1>
-          <p className="mt-1 text-sm text-zinc-400">Start using DMMS AI today</p>
+          <h1 className="mt-4 text-2xl font-bold text-text-primary">Create your account</h1>
+          <p className="mt-1 text-sm text-text-secondary">Start using DMMS AI today</p>
         </div>
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && (
-            <div className="rounded-lg bg-red-500/10 p-3 text-sm text-red-400">
+            <div className="rounded-xl bg-red-500/10 p-3 text-sm text-red-400 ring-1 ring-red-500/20">
               {error}
             </div>
           )}
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-zinc-300">Name</label>
+            <label className="mb-1 block text-sm font-medium text-text-secondary">Name</label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -81,7 +81,7 @@ export default function SignupPage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-zinc-300">Email</label>
+            <label className="mb-1 block text-sm font-medium text-text-secondary">Email</label>
             <Input
               type="email"
               value={email}
@@ -92,12 +92,12 @@ export default function SignupPage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-zinc-300">Password</label>
+            <label className="mb-1 block text-sm font-medium text-text-secondary">Password</label>
             <Input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
+              placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
               required
               minLength={8}
             />
@@ -108,7 +108,7 @@ export default function SignupPage() {
           </Button>
         </form>
 
-        <p className="text-center text-sm text-zinc-500">
+        <p className="text-center text-sm text-text-muted">
           Already have an account?{" "}
           <Link href="/login" className="text-teal-500 hover:underline">
             Sign in
